@@ -1,3 +1,6 @@
+mod state;
+mod errors;
+
 use anchor_lang::prelude::*;
 
 declare_id!("5958qddzZjU34CHUD4bisVBiYgDQ6EREwBLgpbVaSLX7");
