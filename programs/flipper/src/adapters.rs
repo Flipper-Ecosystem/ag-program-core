@@ -18,12 +18,21 @@ pub struct AdapterContext<'info> {
 }
 
 pub trait DexAdapter {
-    fn execute_swap<'a>(&self, ctx: &'a AdapterContext<'a>, amount: u64) -> Result<SwapResult>;
-    fn validate_accounts<'a>(&self, ctx: &'a AdapterContext<'a>) -> Result<()>;
+    fn execute_swap<'info>(
+        &self,
+        ctx: AdapterContext<'info>,
+        amount: u64,
+        remaining_accounts_start_index: usize,
+    ) -> Result<SwapResult>;
+    fn validate_accounts<'info>(
+        &self,
+        ctx: AdapterContext<'info>,
+        remaining_accounts_start_index: usize,
+    ) -> Result<()>;
     fn validate_cpi(&self, program_id: &Pubkey) -> Result<()>;
 }
 
-pub fn get_adapter<'a>(swap: &Swap, registry: &Account<AdapterRegistry>) -> Result<Box<dyn DexAdapter + 'a>> {
+pub fn get_adapter(swap: &Swap, registry: &Account<AdapterRegistry>) -> Result<Box<dyn DexAdapter>> {
     match swap {
         Swap::Raydium => {
             let adapter = RaydiumAdapter {
@@ -62,19 +71,25 @@ pub struct RaydiumAdapter {
 }
 
 impl DexAdapter for RaydiumAdapter {
-    fn execute_swap<'a>(&self, ctx: &'a AdapterContext<'a>, amount: u64) -> Result<SwapResult> {
-        self.validate_accounts(ctx)?;
+    fn execute_swap(
+        &self,
+        ctx: AdapterContext,
+        amount: u64,
+        remaining_accounts_start_index: usize,
+    ) -> Result<SwapResult> {
         msg!("Executing Raydium swap with amount: {}", amount);
         Ok(SwapResult { output_amount: amount }) // Placeholder
     }
 
-    fn validate_accounts<'a>(&self, ctx: &'a AdapterContext<'a>) -> Result<()> {
-        let _input_account: Account<TokenAccount> = Account::try_from(&ctx.input_account)?;
-        let _output_account: Account<TokenAccount> = Account::try_from(&ctx.output_account)?;
-        if ctx.remaining_accounts.len() < 2 {
+    fn validate_accounts(
+        &self,
+        ctx: AdapterContext,
+        remaining_accounts_start_index: usize,
+    ) -> Result<()> {
+        if ctx.remaining_accounts.len() < remaining_accounts_start_index + 2 {
             return Err(ErrorCode::NotEnoughAccountKeys.into());
         }
-        let pool_account = &ctx.remaining_accounts[0];
+        let pool_account = &ctx.remaining_accounts[remaining_accounts_start_index];
         if !self.pool_addresses.contains(&pool_account.key()) {
             return Err(ErrorCode::InvalidPoolAddress.into());
         }
@@ -99,19 +114,25 @@ pub struct WhirlpoolAdapter {
 }
 
 impl DexAdapter for WhirlpoolAdapter {
-    fn execute_swap<'a>(&self, ctx: &'a AdapterContext<'a>, amount: u64) -> Result<SwapResult> {
-        self.validate_accounts(ctx)?;
+    fn execute_swap(
+        &self,
+        ctx: AdapterContext,
+        amount: u64,
+        remaining_accounts_start_index: usize,
+    ) -> Result<SwapResult> {
         msg!("Executing Whirlpool swap, a_to_b: {}, amount: {}", self.a_to_b, amount);
         Ok(SwapResult { output_amount: amount }) // Placeholder
     }
 
-    fn validate_accounts<'a>(&self, ctx: &'a AdapterContext<'a>) -> Result<()> {
-        let _input_account: Account<TokenAccount> = Account::try_from(&ctx.input_account)?;
-        let _output_account: Account<TokenAccount> = Account::try_from(&ctx.output_account)?;
-        if ctx.remaining_accounts.len() < 3 {
+    fn validate_accounts(
+        &self,
+        ctx: AdapterContext,
+        remaining_accounts_start_index: usize,
+    ) -> Result<()> {
+        if ctx.remaining_accounts.len() < remaining_accounts_start_index + 3 {
             return Err(ErrorCode::NotEnoughAccountKeys.into());
         }
-        let pool_account = &ctx.remaining_accounts[0];
+        let pool_account = &ctx.remaining_accounts[remaining_accounts_start_index];
         if !self.pool_addresses.contains(&pool_account.key()) {
             return Err(ErrorCode::InvalidPoolAddress.into());
         }
