@@ -98,3 +98,9 @@ pub struct RoutePlanStep {
     pub input_index: u8,
     pub output_index: u8,
 }
+
+
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct SwapResult {
+    pub output_amount: u64,
+}
