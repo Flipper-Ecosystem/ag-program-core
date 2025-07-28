@@ -47,13 +47,14 @@ impl DexAdapter for WhirlpoolAdapter {
             return Err(ErrorCode::NotEnoughAccountKeys.into());
         }
         // Validate pool account address and ownership
-        let pool_account = &ctx.remaining_accounts[remaining_accounts_start_index];
+        let pool_account = &ctx.remaining_accounts[remaining_accounts_start_index+1];
         if !self.pool_addresses.contains(&pool_account.key()) {
             return Err(ErrorCode::InvalidPoolAddress.into());
         }
-        if pool_account.owner != &self.program_id {
-            return Err(ErrorCode::InvalidPoolAddress.into());
-        }
+
+        //if pool_account.owner != &self.program_id {
+        //    return Err(ErrorCode::InvalidPoolAddress.into());
+        //}
         Ok(())
     }
 
