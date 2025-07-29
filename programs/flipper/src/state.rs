@@ -49,6 +49,33 @@ pub struct AdapterConfigured {
     pub swap_type: Swap,    // Type of swap for the configured adapter
 }
 
+/// Event emitted when an adapter is disabled in the registry.
+#[event]
+pub struct AdapterDisabled {
+    pub swap_type: Swap, // Type of swap for the disabled adapter
+}
+
+/// Event emitted when a pool is disabled in an adapter.
+#[event]
+pub struct PoolDisabled {
+    pub swap_type: Swap,    // Type of swap for the adapter
+    pub pool_address: Pubkey, // Pool address that was disabled
+}
+
+/// Event emitted when a new pool address is added to an adapter.
+#[event]
+pub struct PoolAdded {
+    pub swap_type: Swap,    // Type of swap for the adapter
+    pub pool_address: Pubkey, // Pool address that was added
+}
+
+/// Event emitted when the authority of the registry is changed.
+#[event]
+pub struct AuthorityChanged {
+    pub old_authority: Pubkey, // Previous authority
+    pub new_authority: Pubkey, // New authority
+}
+
 // Event emitted when a platform fee is applied
 #[event]
 pub struct FeeEvent {

@@ -82,3 +82,192 @@ pub struct ConfigureAdapter<'info> {
     #[account(signer)]
     pub authority: Signer<'info>
 }
+
+/// Disables an adapter in the registry by removing it.
+///
+/// This function removes an adapter with the specified swap type from the registry.
+/// It emits an event to log the adapter disablement.
+///
+/// # Arguments
+/// * `ctx` - Context containing the adapter registry account and authority.
+/// * `swap_type` - The swap type of the adapter to disable.
+///
+/// # Returns
+/// * `Result<()>` - Returns Ok(()) on success, or an error if the adapter is not found or authority is invalid.
+pub fn disable_adapter(ctx: Context<DisableAdapter>, swap_type: Swap) -> Result<()> {
+    let registry = &mut ctx.accounts.adapter_registry;
+    let initial_len = registry.supported_adapters.len();
+    registry.supported_adapters.retain(|adapter| adapter.swap_type != swap_type);
+
+    if registry.supported_adapters.len() == initial_len {
+        return Err(error!(ErrorCode::SwapNotSupported));
+    }
+
+    emit_cpi!(
+        AdapterDisabled {
+            swap_type: swap_type.clone(),
+        }
+    );
+
+    Ok(())
+}
+
+/// Disables a specific pool address for an adapter in the registry.
+///
+/// This function removes a pool address from the specified adapter's pool_addresses list.
+/// It emits an event to log the pool disablement.
+///
+/// # Arguments
+/// * `ctx` - Context containing the adapter registry account and authority.
+/// * `swap_type` - The swap type of the adapter.
+/// * `pool_address` - The pool address to disable.
+///
+/// # Returns
+/// * `Result<()>` - Returns Ok(()) on success, or an error if the adapter or pool is not found or authority is invalid.
+pub fn disable_pool(ctx: Context<DisablePool>, swap_type: Swap, pool_address: Pubkey) -> Result<()> {
+    let registry = &mut ctx.accounts.adapter_registry;
+    let adapter = registry
+        .supported_adapters
+        .iter_mut()
+        .find(|adapter| adapter.swap_type == swap_type)
+        .ok_or(error!(ErrorCode::SwapNotSupported))?;
+
+    let initial_len = adapter.pool_addresses.len();
+    adapter.pool_addresses.retain(|addr| *addr != pool_address);
+
+    if adapter.pool_addresses.len() == initial_len {
+        return Err(error!(ErrorCode::PoolNotFound));
+    }
+
+    emit_cpi!(
+        PoolDisabled {
+            swap_type: swap_type.clone(),
+            pool_address,
+        }
+    );
+
+    Ok(())
+}
+
+/// Adds a new pool address to an existing adapter in the registry.
+///
+/// This function adds a new pool address to the specified adapter's pool_addresses list.
+/// It emits an event to log the addition of the new pool address.
+///
+/// # Arguments
+/// * `ctx` - Context containing the adapter registry account and authority.
+/// * `swap_type` - The swap type of the adapter.
+/// * `pool_address` - The new pool address to add.
+///
+/// # Returns
+/// * `Result<()>` - Returns Ok(()) on success, or an error if the adapter is not found or authority is invalid.
+pub fn add_pool_address(ctx: Context<AddPoolAddress>, swap_type: Swap, pool_address: Pubkey) -> Result<()> {
+    let registry = &mut ctx.accounts.adapter_registry;
+    let adapter = registry
+        .supported_adapters
+        .iter_mut()
+        .find(|adapter| adapter.swap_type == swap_type)
+        .ok_or(error!(ErrorCode::SwapNotSupported))?;
+
+    if adapter.pool_addresses.contains(&pool_address) {
+        return Err(error!(ErrorCode::PoolAlreadyExists));
+    }
+
+    adapter.pool_addresses.push(pool_address);
+
+    emit_cpi!(
+        PoolAdded {
+            swap_type: swap_type.clone(),
+            pool_address,
+        }
+    );
+
+    Ok(())
+}
+
+/// Changes the authority of the adapter registry.
+///
+/// This function updates the authority of the adapter registry to a new authority.
+/// It emits an event to log the authority change.
+///
+/// # Arguments
+/// * `ctx` - Context containing the adapter registry account, current authority, and new authority.
+///
+/// # Returns
+/// * `Result<()>` - Returns Ok(()) on success, or an error if the current authority is invalid.
+pub fn change_authority(ctx: Context<ChangeAuthority>) -> Result<()> {
+    let registry = &mut ctx.accounts.adapter_registry;
+    let old_authority = registry.authority;
+    registry.authority = ctx.accounts.new_authority.key();
+
+    emit_cpi!(
+        AuthorityChanged {
+            old_authority,
+            new_authority: registry.authority,
+        }
+    );
+
+    Ok(())
+}
+
+/// Accounts for disabling an adapter in the registry.
+#[event_cpi]
+#[derive(Accounts)]
+pub struct DisableAdapter<'info> {
+    #[account(
+        mut,
+        seeds = [b"adapter_registry"],
+        bump,
+        has_one = authority @ ErrorCode::InvalidAuthority
+    )]
+    pub adapter_registry: Account<'info, AdapterRegistry>,
+    #[account(signer)]
+    pub authority: Signer<'info>,
+}
+
+/// Accounts for disabling a pool in an adapter.
+#[event_cpi]
+#[derive(Accounts)]
+pub struct DisablePool<'info> {
+    #[account(
+        mut,
+        seeds = [b"adapter_registry"],
+        bump,
+        has_one = authority @ ErrorCode::InvalidAuthority
+    )]
+    pub adapter_registry: Account<'info, AdapterRegistry>,
+    #[account(signer)]
+    pub authority: Signer<'info>,
+}
+
+/// Accounts for adding a new pool address to an adapter.
+#[event_cpi]
+#[derive(Accounts)]
+pub struct AddPoolAddress<'info> {
+    #[account(
+        mut,
+        seeds = [b"adapter_registry"],
+        bump,
+        has_one = authority @ ErrorCode::InvalidAuthority
+    )]
+    pub adapter_registry: Account<'info, AdapterRegistry>,
+    #[account(signer)]
+    pub authority: Signer<'info>,
+}
+
+/// Accounts for changing the authority of the adapter registry.
+#[event_cpi]
+#[derive(Accounts)]
+pub struct ChangeAuthority<'info> {
+    #[account(
+        mut,
+        seeds = [b"adapter_registry"],
+        bump,
+        has_one = authority @ ErrorCode::InvalidAuthority
+    )]
+    pub adapter_registry: Account<'info, AdapterRegistry>,
+    #[account(signer)]
+    pub authority: Signer<'info>,
+    /// CHECK: The new authority is not validated here, as it is just a Pubkey being set.
+    pub new_authority: UncheckedAccount<'info>,
+}
