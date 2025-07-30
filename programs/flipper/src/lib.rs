@@ -42,8 +42,8 @@ pub mod flipper {
     ///
     /// # Returns
     /// * `Result<()>` - Returns Ok(()) on success, or an error if initialization fails.
-    pub fn initialize_adapter_registry(ctx: Context<InitializeAdapterRegistry>, adapters: Vec<AdapterInfo>) -> Result<()> {
-        instructions::initialize_adapter_registry(ctx, adapters)
+    pub fn initialize_adapter_registry(ctx: Context<InitializeAdapterRegistry>, adapters: Vec<AdapterInfo>, operators: Vec<Pubkey>) -> Result<()> {
+        instructions::initialize_adapter_registry(ctx, adapters, operators)
     }
 
     // Configures an adapter in the registry by adding or updating it
