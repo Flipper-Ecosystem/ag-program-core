@@ -236,13 +236,40 @@ pub fn change_authority(ctx: Context<ChangeAuthority>) -> Result<()> {
     Ok(())
 }
 
+
+/// Resets the adapter registry with new adapters and operators.
+///
+/// This function overwrites the existing supported adapters and operators lists.
+/// Only the authority can call this instruction.
+///
+/// # Arguments
+/// * `ctx` - Context containing the adapter registry account and authority.
+/// * `adapters` - New vector of adapter information.
+/// * `operators` - New vector of operator public keys.
+///
+/// # Returns
+/// * `Result<()>` - Returns Ok(()) on success, or an error if the authority is invalid.
+pub fn reset_adapter_registry(ctx: Context<ResetAdapterRegistry>, adapters: Vec<AdapterInfo>, operators: Vec<Pubkey>) -> Result<()> {
+    let registry = &mut ctx.accounts.adapter_registry;
+    registry.supported_adapters = adapters;
+    registry.operators = operators;
+
+    emit_cpi!(
+        RegistryReset {
+            authority: ctx.accounts.authority.key(),
+        }
+    );
+
+    Ok(())
+}
+
 /// Accounts for initializing the adapter registry.
 #[derive(Accounts)]
 pub struct InitializeAdapterRegistry<'info> {
     #[account(
         init,
         payer = payer,
-        space = 8 + 32 + 4 + 100 * (4 + 32 + 32 + 8) + 4 + 100 * 32, // Increased space for operators
+        space = 8 + 32 + 4 + 10 * (4 + 32 + 32 + 4 + 10 * 32) + 4 + 10 * 32, // Space for 10 adapters and 10 operators
         seeds = [b"adapter_registry"],
         bump
     )]
@@ -357,5 +384,20 @@ pub struct ChangeAuthority<'info> {
     #[account(signer)]
     pub authority: Signer<'info>,
     /// CHECK: The new authority is not validated here, as it is just a Pubkey being set.
-    pub new_authority: UncheckedAccount<'info>
+    pub new_authority: UncheckedAccount<'info>,
+}
+
+/// Accounts for resetting the adapter registry.
+#[event_cpi]
+#[derive(Accounts)]
+pub struct ResetAdapterRegistry<'info> {
+    #[account(
+        mut,
+        seeds = [b"adapter_registry"],
+        bump,
+        has_one = authority @ ErrorCode::InvalidAuthority
+    )]
+    pub adapter_registry: Account<'info, AdapterRegistry>,
+    #[account(signer)]
+    pub authority: Signer<'info>,
 }

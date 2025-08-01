@@ -116,6 +116,10 @@ pub struct SwapEvent {
     pub output_mint: Pubkey, // Mint of the output token
     pub output_amount: u64,  // Amount of output tokens
 }
+#[event]
+pub struct RegistryReset {
+    pub authority: Pubkey,
+}
 
 // Defines supported swap types for various DEX protocols
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq)]
