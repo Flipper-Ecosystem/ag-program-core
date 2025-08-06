@@ -49,5 +49,11 @@ pub enum ErrorCode {
     #[msg("Operator already exists")]
     OperatorAlreadyExists = 6026,
     #[msg("Operator not found")]
-    OperatorNotFound,
+    OperatorNotFound = 6027,
+    #[msg("Invalid mint account")]
+    InvalidMint = 6028,
+    #[msg("Vault not found")]
+    VaultNotFound = 6029,
+    #[msg("Pool Account not found")]
+    PoolAccountNotFound = 6039,
 }
