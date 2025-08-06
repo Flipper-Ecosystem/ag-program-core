@@ -14,7 +14,7 @@ pub mod flipper {
     // Re-export instruction-related items for convenient imports
     pub use instructions::{
         adapter_module::*,  // Adapter registry management instructions
-        swap_processor::*,  // Swap execution instructions
+        swap_processor_module::*,  // Swap execution instructions
     };
 
 
