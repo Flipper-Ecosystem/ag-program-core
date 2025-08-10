@@ -152,7 +152,8 @@ impl DexAdapter for WhirlpoolAdapter {
 
         // Validate that the pool account is a supported Whirlpool pool
         let pool_account = &ctx.remaining_accounts[remaining_accounts_start_index];
-        
+ 
+
         // Optional: Validate pool account ownership (uncomment if needed)
         // Ensures the pool account is owned by the Whirlpool program
         // if pool_account.owner != &self.program_id {
