@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::TokenAccount;
-use crate::adapters::{dex_adapter::DexAdapter, raydium::RaydiumAdapter, whirlpool::WhirlpoolAdapter};
+use crate::adapters::{dex_adapter::DexAdapter, raydium::RaydiumAdapter, whirlpool::WhirlpoolAdapter, meteora::MeteoraAdapter};
 use crate::errors::ErrorCode;
 use crate::state::{Swap, AdapterRegistry};
 
@@ -67,5 +67,21 @@ pub fn get_adapter(swap: &Swap, registry: &Account<AdapterRegistry>) -> Result<B
             Ok(Box::new(adapter))
         }
         _ => Err(ErrorCode::SwapNotSupported.into()), // Return error for unsupported swap types
+        Swap::Meteora => {
+            // Initialize Meteora Adapter with program ID and pool addresses
+            let adapter = MeteoraAdapter {
+                program_id: registry.get_adapter_program_id(swap)?,
+                pool_addresses: registry
+                    .supported_adapters
+                    .iter()
+                    .find(|a| a.swap_type == *swap)
+                    .map(|a| a.pool_addresses.clone())
+                    .unwrap_or_default(),
+            };
+            // Validate CPI interface for security
+            adapter.validate_cpi(&adapter.program_id)?;
+            Ok(Box::new(adapter))
+        }
+        _ => Err(ErrorCode::SwapNotSupported.into()),
     }
 }
