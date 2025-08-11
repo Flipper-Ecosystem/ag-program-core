@@ -60,4 +60,6 @@ pub enum ErrorCode {
     InvalidVaultAddress = 6046,
     #[msg("Vault authority not initialized")]
     VaultAuthorityNotInitialized = 6047,
+    #[msg("Invalid account")]
+    InvalidAccount = 6048
 }

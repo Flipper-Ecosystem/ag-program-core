@@ -8,6 +8,7 @@ use crate::state::{Swap, AdapterRegistry};
 pub mod dex_adapter;
 pub mod raydium;
 pub mod whirlpool;
+mod meteora;
 
 // Result struct for swap operations, holding the output amount
 #[derive(AnchorSerialize, AnchorDeserialize)]
