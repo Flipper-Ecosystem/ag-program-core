@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Mint};
 use crate::errors::ErrorCode;
 
+
 /// Data structure for vault authority
 #[account]
 pub struct VaultAuthority {
@@ -195,6 +196,51 @@ pub fn close_vault(ctx: Context<CloseVault>) -> Result<()> {
     msg!("Successfully closed vault: {}", ctx.accounts.vault.key());
     Ok(())
 }
+
+pub fn initialize_vaults(ctx: Context<InitializeVaults>) -> Result<()> {
+    msg!("Vaults initialized successfully");
+    Ok(())
+}
+
+/// Initializes input and output vaults owned by the vault_authority PDA.
+#[derive(Accounts)]
+pub struct InitializeVaults<'info> {
+    /// CHECK: This is a PDA used as authority for token accounts
+    #[account(
+        seeds = [b"vault_authority"],
+        bump
+    )]
+    pub vault_authority: AccountInfo<'info>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        seeds = [b"vault", source_mint.key().as_ref()],
+        bump,
+        token::mint = source_mint,
+        token::authority = vault_authority,
+    )]
+    pub input_vault: Account<'info, TokenAccount>,
+
+    #[account(
+        init,
+        payer = payer,
+        seeds = [b"vault", destination_mint.key().as_ref()],
+        bump,
+        token::mint = destination_mint,
+        token::authority = vault_authority,
+    )]
+    pub output_vault: Account<'info, TokenAccount>,
+
+    pub source_mint: Account<'info, Mint>,
+    pub destination_mint: Account<'info, Mint>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
 
 /// Accounts for changing the vault authority admin
 #[derive(Accounts)]

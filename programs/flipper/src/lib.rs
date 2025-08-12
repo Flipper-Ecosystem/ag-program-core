@@ -14,6 +14,7 @@ pub mod flipper {
     pub use instructions::{
         adapter_module::*,
         swap_processor_module::*,
+        vault_manager_module::*
     };
     pub use errors::ErrorCode;
     pub use state::{
@@ -60,6 +61,11 @@ pub mod flipper {
 
     pub fn reset_adapter_registry(ctx: Context<ResetAdapterRegistry>, adapters: Vec<AdapterInfo>, operators: Vec<Pubkey>) -> Result<()> {
         instructions::reset_adapter_registry(ctx, adapters, operators)
+    }
+
+
+    pub fn initialize_vaults(ctx: Context<InitializeVaults>) -> Result<()> {
+        instructions::initialize_vaults(ctx)
     }
 
     pub fn route<'info>(
