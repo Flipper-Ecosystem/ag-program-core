@@ -1,8 +1,48 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Token, TokenAccount, Approve, approve, Transfer, transfer};
+use anchor_spl::token::{Token, TokenAccount, Approve, approve, Transfer, transfer, InitializeAccount, initialize_account};
 use crate::adapters::{AdapterContext, get_adapter};
 use crate::errors::ErrorCode;
 use crate::state::*;
+
+/// Initializes input and output vaults owned by the vault_authority PDA.
+pub fn initialize_vaults(ctx: Context<InitializeVaults>) -> Result<()> {
+    let vault_authority_bump = ctx.bumps.vault_authority;
+    let authority_seeds: &[&[u8]] = &[
+        b"vault_authority",
+        &[vault_authority_bump],
+    ];
+    let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
+
+    // Initialize input vault
+    let cpi_accounts_input = InitializeAccount {
+        account: ctx.accounts.input_vault.to_account_info(),
+        mint: ctx.accounts.source_mint.to_account_info(),
+        authority: ctx.accounts.vault_authority.to_account_info(),
+        rent: ctx.accounts.rent.to_account_info(),
+    };
+    let cpi_ctx_input = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        cpi_accounts_input,
+        signer_seeds,
+    );
+    initialize_account(cpi_ctx_input)?;
+
+    // Initialize output vault
+    let cpi_accounts_output = InitializeAccount {
+        account: ctx.accounts.output_vault.to_account_info(),
+        mint: ctx.accounts.destination_mint.to_account_info(),
+        authority: ctx.accounts.vault_authority.to_account_info(),
+        rent: ctx.accounts.rent.to_account_info(),
+    };
+    let cpi_ctx_output = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        cpi_accounts_output,
+        signer_seeds,
+    );
+    initialize_account(cpi_ctx_output)?;
+
+    Ok(())
+}
 
 /// Executes a token swap through a series of routing steps using router vaults.
 pub fn route<'info>(
@@ -194,6 +234,38 @@ pub fn route<'info>(
     Ok(output_amount)
 }
 
+/// Accounts for initializing input and output vaults.
+#[derive(Accounts)]
+pub struct InitializeVaults<'info> {
+    #[account(
+        seeds = [b"vault_authority"],
+        bump
+    )]
+    /// CHECK: vault authority
+    pub vault_authority: AccountInfo<'info>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(
+        mut,
+        constraint = input_vault.lamports() > 0 && input_vault.data_is_empty()
+    )]
+    /// CHECK: Will be initialized as a token account
+    pub input_vault: AccountInfo<'info>,
+    #[account(
+        mut,
+        constraint = output_vault.lamports() > 0 && output_vault.data_is_empty()
+    )]
+    /// CHECK: Will be initialized as a token account
+    pub output_vault: AccountInfo<'info>,
+    /// CHECK: Mint account for the input toke
+    pub source_mint: AccountInfo<'info>,
+    /// CHECK: Mint account for the output toke
+    pub destination_mint: AccountInfo<'info>,
+    pub token_program: Program<'info, Token>,
+    pub rent: Sysvar<'info, Rent>,
+    pub system_program: Program<'info, System>,
+}
+
 /// Accounts for executing a token swap route with program-owned vaults.
 #[event_cpi]
 #[derive(Accounts)]
@@ -208,7 +280,6 @@ pub struct Route<'info> {
         seeds = [b"vault_authority"],
         bump
     )]
-
     /// CHECK: vault authority
     pub vault_authority: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
@@ -226,7 +297,6 @@ pub struct Route<'info> {
     pub user_destination_token_account: Account<'info, TokenAccount>,
     /// CHECK: Mint account for the input token
     pub source_mint: AccountInfo<'info>,
-
     /// CHECK: Mint account for the output token
     pub destination_mint: AccountInfo<'info>,
     #[account(mut)]
