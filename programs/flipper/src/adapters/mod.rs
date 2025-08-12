@@ -8,7 +8,7 @@ use crate::state::{Swap, AdapterRegistry};
 pub mod dex_adapter;
 pub mod raydium;
 pub mod whirlpool;
-mod meteora;
+pub mod meteora;
 
 // Result struct for swap operations, holding the output amount
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -17,7 +17,6 @@ pub struct SwapResult {
 }
 
 // Context struct for passing account information to adapters
-// Holds references to token program, authority, input/output accounts, and remaining accounts
 #[derive(Clone)]
 pub struct AdapterContext<'info> {
     pub token_program: AccountInfo<'info>, // Token program for CPI calls
@@ -36,52 +35,33 @@ pub struct AdapterContext<'info> {
 pub fn get_adapter(swap: &Swap, registry: &Account<AdapterRegistry>) -> Result<Box<dyn DexAdapter>> {
     match swap {
         Swap::Raydium => {
-            // Initialize Raydium adapter with program ID and pool addresses
+            // Initialize Raydium adapter with program ID
             let adapter = RaydiumAdapter {
                 program_id: registry.get_adapter_program_id(swap)?,
-                pool_addresses: registry
-                    .supported_adapters
-                    .iter()
-                    .find(|a| a.swap_type == *swap)
-                    .map(|a| a.pool_addresses.clone())
-                    .unwrap_or_default(),
             };
             // Validate CPI interface for security
             adapter.validate_cpi(&adapter.program_id)?;
             Ok(Box::new(adapter))
         }
         Swap::Whirlpool { a_to_b } => {
-            // Initialize Whirlpool adapter with program ID, direction, and pool addresses
+            // Initialize Whirlpool adapter with program ID and direction
             let adapter = WhirlpoolAdapter {
                 program_id: registry.get_adapter_program_id(swap)?,
                 a_to_b: *a_to_b,
-                pool_addresses: registry
-                    .supported_adapters
-                    .iter()
-                    .find(|a| a.swap_type == *swap)
-                    .map(|a| a.pool_addresses.clone())
-                    .unwrap_or_default(),
+            };
+            // Validate CPI interface for security
+            adapter.validate_cpi(&adapter.program_id)?;
+            Ok(Box::new(adapter))
+        }
+        Swap::Meteora => {
+            // Initialize Meteora Adapter with program ID
+            let adapter = MeteoraAdapter {
+                program_id: registry.get_adapter_program_id(swap)?,
             };
             // Validate CPI interface for security
             adapter.validate_cpi(&adapter.program_id)?;
             Ok(Box::new(adapter))
         }
         _ => Err(ErrorCode::SwapNotSupported.into()), // Return error for unsupported swap types
-        Swap::Meteora => {
-            // Initialize Meteora Adapter with program ID and pool addresses
-            let adapter = MeteoraAdapter {
-                program_id: registry.get_adapter_program_id(swap)?,
-                pool_addresses: registry
-                    .supported_adapters
-                    .iter()
-                    .find(|a| a.swap_type == *swap)
-                    .map(|a| a.pool_addresses.clone())
-                    .unwrap_or_default(),
-            };
-            // Validate CPI interface for security
-            adapter.validate_cpi(&adapter.program_id)?;
-            Ok(Box::new(adapter))
-        }
-        _ => Err(ErrorCode::SwapNotSupported.into()),
     }
 }

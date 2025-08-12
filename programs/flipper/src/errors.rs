@@ -61,5 +61,7 @@ pub enum ErrorCode {
     #[msg("Vault authority not initialized")]
     VaultAuthorityNotInitialized = 6047,
     #[msg("Invalid account")]
-    InvalidAccount = 6048
+    InvalidAccount = 6048,
+    #[msg("Pool disabled")]
+    PoolDisabled = 6049
 }
