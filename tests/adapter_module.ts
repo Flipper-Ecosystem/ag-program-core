@@ -260,6 +260,18 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
         }
     });
 
+
+    it("Initializes adapter registry correctly", async () => {
+        const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
+        assert.equal(registryAccount.authority.toString(), initialAuthority.publicKey.toString());
+        assert.equal(registryAccount.operators.length, 1);
+        assert.equal(registryAccount.operators[0].toString(), operator.publicKey.toString());
+        assert.equal(registryAccount.supportedAdapters.length, 2);
+        assert.equal(registryAccount.supportedAdapters[0].name, "Raydium");
+        assert.equal(registryAccount.supportedAdapters[1].name, "Whirlpool");
+    });
+
+
     it("Initializes pool info for Raydium", async () => {
         try {
             const swapTypeBytes = getSwapTypeBytes({ raydium: {} });
@@ -549,4 +561,322 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
             assert.include(error.message, "NotEnoughAccountKeys");
         }
     });
+
+    it("Configures a new adapter as operator", async () => {
+        const newProgramId = Keypair.generate().publicKey;
+        const newAdapter = {
+            name: "NewAdapter",
+            programId: newProgramId,
+            swapType: { raydium: {} },
+        };
+
+        try {
+            await program.methods
+                .configureAdapter(newAdapter)
+                .accounts({
+                    adapterRegistry,
+                    operator: operator.publicKey,
+                })
+                .signers([operator])
+                .rpc();
+
+            const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
+            const newAdapterInfo = registryAccount.supportedAdapters.find(a => a.name === "NewAdapter");
+            assert.isDefined(newAdapterInfo);
+            assert.equal(newAdapterInfo.programId.toString(), newProgramId.toString());
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in configureAdapter test. Logs:", logs);
+            }
+            throw error;
+        }
+    });
+
+    it("Fails to configure adapter with unauthorized account", async () => {
+        const newProgramId = Keypair.generate().publicKey;
+        const newAdapter = {
+            name: "UnauthorizedAdapter",
+            programId: newProgramId,
+            swapType: { raydium: {} },
+        };
+
+        try {
+            await program.methods
+                .configureAdapter(newAdapter)
+                .accounts({
+                    adapterRegistry,
+                    operator: unauthorized.publicKey,
+                })
+                .signers([unauthorized])
+                .rpc();
+            assert.fail("Should have failed with unauthorized account");
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in unauthorized configureAdapter test. Logs:", logs);
+            }
+            assert.include(error.message, "InvalidOperator");
+        }
+    });
+
+    it("Disables an adapter as operator", async () => {
+        try {
+            await program.methods
+                .disableAdapter({ raydium: {} })
+                .accounts({
+                    adapterRegistry,
+                    operator: operator.publicKey,
+                })
+                .signers([operator])
+                .rpc();
+
+            const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
+            const raydiumAdapter = registryAccount.supportedAdapters.find(a => a.name === "Raydium");
+            assert.isUndefined(raydiumAdapter);
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in disableAdapter test. Logs:", logs);
+            }
+            throw error;
+        }
+    });
+
+    it("Fails to disable adapter with unauthorized account", async () => {
+        try {
+            await program.methods
+                .disableAdapter({ raydium: {} })
+                .accounts({
+                    adapterRegistry,
+                    operator: unauthorized.publicKey,
+                })
+                .signers([unauthorized])
+                .rpc();
+            assert.fail("Should have failed with unauthorized account");
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in unauthorized disableAdapter test. Logs:", logs);
+            }
+            assert.include(error.message, "InvalidOperator");
+        }
+    });
+
+    it("Disables a pool address as operator", async () => {
+        try {
+            // Сначала инициализируем pool info
+            const swapTypeBytes = getSwapTypeBytes({ raydium: {} });
+            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .initializePoolInfo({ raydium: {} }, poolAddress)
+                .accounts({
+                    poolInfo,
+                    adapterRegistry,
+                    payer: payer.publicKey,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([payer, operator])
+                .rpc();
+
+            // Теперь отключаем pool
+            await program.methods
+                .disablePool({ raydium: {} }, poolAddress)
+                .accounts({
+                    poolInfo,
+                    adapterRegistry,
+                    operator: operator.publicKey,
+                })
+                .signers([operator])
+                .rpc();
+
+            const poolInfoAccount = await program.account.poolInfo.fetch(poolInfo);
+            assert.isFalse(poolInfoAccount.enabled);
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in disablePool test. Logs:", logs);
+            }
+            throw error;
+        }
+    });
+
+    it("Fails to disable pool with unauthorized account", async () => {
+        try {
+            // Инициализируем pool info
+            const swapTypeBytes = getSwapTypeBytes({ raydium: {} });
+            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .initializePoolInfo({ raydium: {} }, poolAddress)
+                .accounts({
+                    poolInfo,
+                    adapterRegistry,
+                    payer: payer.publicKey,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([payer, operator])
+                .rpc();
+
+            await program.methods
+                .disablePool({ raydium: {} }, poolAddress)
+                .accounts({
+                    poolInfo,
+                    adapterRegistry,
+                    operator: unauthorized.publicKey,
+                })
+                .signers([unauthorized])
+                .rpc();
+            assert.fail("Should have failed with unauthorized account");
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in unauthorized disablePool test. Logs:", logs);
+            }
+            assert.include(error.message, "InvalidOperator");
+        }
+    });
+
+    it("Adds an operator as authority", async () => {
+        const newOperator = Keypair.generate();
+        try {
+            await program.methods
+                .addOperator(newOperator.publicKey)
+                .accounts({
+                    adapterRegistry,
+                    authority: currentAuthority.publicKey,
+                })
+                .signers([currentAuthority])
+                .rpc();
+
+            const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
+            assert.isTrue(registryAccount.operators.some(op => op.equals(newOperator.publicKey)));
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in addOperator test. Logs:", logs);
+            }
+            throw error;
+        }
+    });
+
+    it("Fails to add operator with unauthorized account", async () => {
+        const newOperator = Keypair.generate();
+        try {
+            await program.methods
+                .addOperator(newOperator.publicKey)
+                .accounts({
+                    adapterRegistry,
+                    authority: unauthorized.publicKey,
+                })
+                .signers([unauthorized])
+                .rpc();
+            assert.fail("Should have failed with unauthorized account");
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in unauthorized addOperator test. Logs:", logs);
+            }
+            assert.include(error.message, "InvalidAuthority");
+        }
+    });
+
+    it("Removes an operator as authority", async () => {
+        try {
+            await program.methods
+                .removeOperator(operator.publicKey)
+                .accounts({
+                    adapterRegistry,
+                    authority: currentAuthority.publicKey,
+                })
+                .signers([currentAuthority])
+                .rpc();
+
+            const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
+            assert.isFalse(registryAccount.operators.some(op => op.equals(operator.publicKey)));
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in removeOperator test. Logs:", logs);
+            }
+            throw error;
+        }
+    });
+
+    it("Fails to remove operator with unauthorized account", async () => {
+        try {
+            await program.methods
+                .removeOperator(operator.publicKey)
+                .accounts({
+                    adapterRegistry,
+                    authority: unauthorized.publicKey,
+                })
+                .signers([unauthorized])
+                .rpc();
+            assert.fail("Should have failed with unauthorized account");
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in unauthorized removeOperator test. Logs:", logs);
+            }
+            assert.include(error.message, "InvalidAuthority");
+        }
+    });
+
+    it("Changes authority", async () => {
+        const newAuthority = Keypair.generate();
+        try {
+            await program.methods
+                .changeAuthority()
+                .accounts({
+                    adapterRegistry,
+                    authority: currentAuthority.publicKey,
+                    newAuthority: newAuthority.publicKey,
+                })
+                .signers([currentAuthority])
+                .rpc();
+
+            const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
+            assert.equal(registryAccount.authority.toString(), newAuthority.publicKey.toString());
+            currentAuthority = newAuthority; // Update current authority
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in changeAuthority test. Logs:", logs);
+            }
+            throw error;
+        }
+    });
+
+    it("Fails to change authority with unauthorized account", async () => {
+        const newAuthority = Keypair.generate();
+        try {
+            await program.methods
+                .changeAuthority()
+                .accounts({
+                    adapterRegistry,
+                    authority: unauthorized.publicKey,
+                    newAuthority: newAuthority.publicKey,
+                })
+                .signers([unauthorized])
+                .rpc();
+            assert.fail("Should have failed with unauthorized account");
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in unauthorized changeAuthority test. Logs:", logs);
+            }
+            assert.include(error.message, "InvalidAuthority");
+        }
+    });
+    
 });
