@@ -108,7 +108,6 @@ pub fn route<'info>(
             return Err(ErrorCode::InvalidPoolAddress.into());
         }
 
-
         let adapter_ctx = AdapterContext {
             token_program: token_program_info.clone(),
             authority: ctx.accounts.vault_authority.to_account_info(),
