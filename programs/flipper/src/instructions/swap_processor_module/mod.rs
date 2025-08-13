@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Mint, Token, TokenAccount, Approve, approve, Transfer, transfer, InitializeAccount, initialize_account};
+use anchor_spl::token::{Mint, Token, TokenAccount, Transfer, transfer, InitializeAccount, initialize_account};
 use anchor_lang::solana_program::{program::invoke_signed, system_instruction};
 use crate::adapters::{AdapterContext, get_adapter};
 use crate::errors::ErrorCode;
@@ -108,17 +108,6 @@ pub fn route<'info>(
             return Err(ErrorCode::InvalidPoolAddress.into());
         }
 
-        let cpi_accounts_approve = Approve {
-            to: input_vault_account.clone(),
-            delegate: pool_account.clone(),
-            authority: ctx.accounts.vault_authority.to_account_info(),
-        };
-        let cpi_ctx_approve = CpiContext::new_with_signer(
-            token_program_info.clone(),
-            cpi_accounts_approve,
-            signer_seeds
-        );
-        approve(cpi_ctx_approve, step_amount)?;
 
         let adapter_ctx = AdapterContext {
             token_program: token_program_info.clone(),

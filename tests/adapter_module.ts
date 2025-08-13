@@ -878,5 +878,5 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
             assert.include(error.message, "InvalidAuthority");
         }
     });
-    
+
 });
