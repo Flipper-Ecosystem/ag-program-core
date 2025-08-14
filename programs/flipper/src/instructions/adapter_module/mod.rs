@@ -5,17 +5,6 @@ use crate::errors::ErrorCode;
 use crate::state::*;
 
 /// Initializes the adapter registry with a list of supported adapters and operators.
-///
-/// This function creates a new adapter registry account, sets its supported adapters,
-/// assigns the provided authority, and initializes the operators list.
-///
-/// # Arguments
-/// * `ctx` - Context containing the adapter registry account, payer, authority, and system program.
-/// * `adapters` - Vector of adapter information to initialize the registry with.
-/// * `operators` - Vector of operator public keys to initialize the registry with.
-///
-/// # Returns
-/// * `Result<()>` - Returns Ok(()) on success, or an error if initialization fails.
 pub fn initialize_adapter_registry(ctx: Context<InitializeAdapterRegistry>, adapters: Vec<AdapterInfo>, operators: Vec<Pubkey>) -> Result<()> {
     let registry = &mut ctx.accounts.adapter_registry;
     registry.supported_adapters = adapters;
@@ -24,17 +13,27 @@ pub fn initialize_adapter_registry(ctx: Context<InitializeAdapterRegistry>, adap
     Ok(())
 }
 
+/// Initializes a new pool info account for an adapter.
+pub fn initialize_pool_info(ctx: Context<InitializePoolInfo>, swap_type: Swap, pool_address: Pubkey) -> Result<()> {
+    let registry = &ctx.accounts.adapter_registry;
+    if !registry.is_supported_adapter(&swap_type) {
+        return Err(ErrorCode::SwapNotSupported.into());
+    }
+
+    let pool_info = &mut ctx.accounts.pool_info;
+    pool_info.adapter_swap_type = swap_type.clone();
+    pool_info.pool_address = pool_address;
+    pool_info.enabled = true;
+
+    emit_cpi!(PoolInitialized {
+        swap_type,
+        pool_address,
+    });
+
+    Ok(())
+}
+
 /// Adds an operator to the adapter registry.
-///
-/// This function adds a new operator to the registry's operators list.
-/// Only the authority can call this instruction.
-///
-/// # Arguments
-/// * `ctx` - Context containing the adapter registry account, authority, and new operator.
-/// * `operator` - The public key of the operator to add.
-///
-/// # Returns
-/// * `Result<()>` - Returns Ok(()) on success, or an error if the authority is invalid or operator already exists.
 pub fn add_operator(ctx: Context<AddOperator>, operator: Pubkey) -> Result<()> {
     let registry = &mut ctx.accounts.adapter_registry;
     if registry.operators.contains(&operator) {
@@ -42,26 +41,12 @@ pub fn add_operator(ctx: Context<AddOperator>, operator: Pubkey) -> Result<()> {
     }
     registry.operators.push(operator);
 
-    emit_cpi!(
-        OperatorAdded {
-            operator,
-        }
-    );
+    emit_cpi!(OperatorAdded { operator });
 
     Ok(())
 }
 
 /// Removes an operator from the adapter registry.
-///
-/// This function removes an operator from the registry's operators list.
-/// Only the authority can call this instruction.
-///
-/// # Arguments
-/// * `ctx` - Context containing the adapter registry account, authority, and operator to remove.
-/// * `operator` - The public key of the operator to remove.
-///
-/// # Returns
-/// * `Result<()>` - Returns Ok(()) on success, or an error if the authority is invalid or operator not found.
 pub fn remove_operator(ctx: Context<RemoveOperator>, operator: Pubkey) -> Result<()> {
     let registry = &mut ctx.accounts.adapter_registry;
     let initial_len = registry.operators.len();
@@ -71,26 +56,12 @@ pub fn remove_operator(ctx: Context<RemoveOperator>, operator: Pubkey) -> Result
         return Err(error!(ErrorCode::OperatorNotFound));
     }
 
-    emit_cpi!(
-        OperatorRemoved {
-            operator,
-        }
-    );
+    emit_cpi!(OperatorRemoved { operator });
 
     Ok(())
 }
 
 /// Configures an adapter in the registry by adding or updating it.
-///
-/// This function either updates an existing adapter with the same swap type or adds a new one
-/// to the registry. It emits an event to log the configuration change. Only operators or authority can call this.
-///
-/// # Arguments
-/// * `ctx` - Context containing the adapter registry account and operator/authority.
-/// * `adapter` - The adapter information to add or update.
-///
-/// # Returns
-/// * `Result<()>` - Returns Ok(()) on success, or an error if the caller is not authorized.
 pub fn configure_adapter(ctx: Context<ConfigureAdapter>, adapter: AdapterInfo) -> Result<()> {
     let registry = &mut ctx.accounts.adapter_registry;
     if let Some(existing) = registry.supported_adapters.iter_mut().find(|a| a.swap_type == adapter.swap_type) {
@@ -99,27 +70,15 @@ pub fn configure_adapter(ctx: Context<ConfigureAdapter>, adapter: AdapterInfo) -
         registry.supported_adapters.push(adapter.clone());
     }
 
-    emit_cpi!(
-        AdapterConfigured {
-            program_id: adapter.program_id,
-            swap_type: adapter.swap_type.clone(),
-        }
-    );
+    emit_cpi!(AdapterConfigured {
+        program_id: adapter.program_id,
+        swap_type: adapter.swap_type.clone(),
+    });
 
     Ok(())
 }
 
 /// Disables an adapter in the registry by removing it.
-///
-/// This function removes an adapter with the specified swap type from the registry.
-/// It emits an event to log the adapter disablement. Only operators or authority can call this.
-///
-/// # Arguments
-/// * `ctx` - Context containing the adapter registry account and operator/authority.
-/// * `swap_type` - The swap type of the adapter to disable.
-///
-/// # Returns
-/// * `Result<()>` - Returns Ok(()) on success, or an error if the adapter is not found or caller is not authorized.
 pub fn disable_adapter(ctx: Context<DisableAdapter>, swap_type: Swap) -> Result<()> {
     let registry = &mut ctx.accounts.adapter_registry;
     let initial_len = registry.supported_adapters.len();
@@ -129,136 +88,54 @@ pub fn disable_adapter(ctx: Context<DisableAdapter>, swap_type: Swap) -> Result<
         return Err(error!(ErrorCode::SwapNotSupported));
     }
 
-    emit_cpi!(
-        AdapterDisabled {
-            swap_type: swap_type.clone(),
-        }
-    );
+    emit_cpi!(AdapterDisabled { swap_type });
 
     Ok(())
 }
 
-/// Disables a specific pool address for an adapter in the registry.
-///
-/// This function removes a pool address from the specified adapter's pool_addresses list.
-/// It emits an event to log the pool disablement. Only operators or authority can call this.
-///
-/// # Arguments
-/// * `ctx` - Context containing the adapter registry account and operator/authority.
-/// * `swap_type` - The swap type of the adapter.
-/// * `pool_address` - The pool address to disable.
-///
-/// # Returns
-/// * `Result<()>` - Returns Ok(()) on success, or an error if the adapter or pool is not found or caller is not authorized.
+/// Disables a specific pool for an adapter.
 pub fn disable_pool(ctx: Context<DisablePool>, swap_type: Swap, pool_address: Pubkey) -> Result<()> {
-    let registry = &mut ctx.accounts.adapter_registry;
-    let adapter = registry
-        .supported_adapters
-        .iter_mut()
-        .find(|adapter| adapter.swap_type == swap_type)
-        .ok_or(error!(ErrorCode::SwapNotSupported))?;
-
-    let initial_len = adapter.pool_addresses.len();
-    adapter.pool_addresses.retain(|addr| *addr != pool_address);
-
-    if adapter.pool_addresses.len() == initial_len {
-        return Err(error!(ErrorCode::PoolNotFound));
+    let pool_info = &mut ctx.accounts.pool_info;
+    if pool_info.adapter_swap_type != swap_type || pool_info.pool_address != pool_address {
+        return Err(error!(ErrorCode::InvalidPoolAddress));
+    }
+    if !pool_info.enabled {
+        return Err(error!(ErrorCode::PoolDisabled));
     }
 
-    emit_cpi!(
-        PoolDisabled {
-            swap_type: swap_type.clone(),
-            pool_address,
-        }
-    );
+    pool_info.enabled = false;
 
-    Ok(())
-}
-
-/// Adds a new pool address to an existing adapter in the registry.
-///
-/// This function adds a new pool address to the specified adapter's pool_addresses list.
-/// It emits an event to log the addition of the new pool address. Only operators or authority can call this.
-///
-/// # Arguments
-/// * `ctx` - Context containing the adapter registry account and operator/authority.
-/// * `swap_type` - The swap type of the adapter.
-/// * `pool_address` - The new pool address to add.
-///
-/// # Returns
-/// * `Result<()>` - Returns Ok(()) on success, or an error if the adapter is not found or caller is not authorized.
-pub fn add_pool_address(ctx: Context<AddPoolAddress>, swap_type: Swap, pool_address: Pubkey) -> Result<()> {
-    let registry = &mut ctx.accounts.adapter_registry;
-    let adapter = registry
-        .supported_adapters
-        .iter_mut()
-        .find(|adapter| adapter.swap_type == swap_type)
-        .ok_or(error!(ErrorCode::SwapNotSupported))?;
-
-    if adapter.pool_addresses.contains(&pool_address) {
-        return Err(error!(ErrorCode::PoolAlreadyExists));
-    }
-
-    adapter.pool_addresses.push(pool_address);
-
-    emit_cpi!(
-        PoolAdded {
-            swap_type: swap_type.clone(),
-            pool_address,
-        }
-    );
+    emit_cpi!(PoolDisabled {
+        swap_type,
+        pool_address,
+    });
 
     Ok(())
 }
 
 /// Changes the authority of the adapter registry.
-///
-/// This function updates the authority of the adapter registry to a new authority.
-/// It emits an event to log the authority change. Only the current authority can call this.
-///
-/// # Arguments
-/// * `ctx` - Context containing the adapter registry account, current authority, and new authority.
-///
-/// # Returns
-/// * `Result<()>` - Returns Ok(()) on success, or an error if the current authority is invalid.
 pub fn change_authority(ctx: Context<ChangeAuthority>) -> Result<()> {
     let registry = &mut ctx.accounts.adapter_registry;
     let old_authority = registry.authority;
     registry.authority = ctx.accounts.new_authority.key();
 
-    emit_cpi!(
-        AuthorityChanged {
-            old_authority,
-            new_authority: registry.authority,
-        }
-    );
+    emit_cpi!(AuthorityChanged {
+        old_authority,
+        new_authority: registry.authority,
+    });
 
     Ok(())
 }
 
-
 /// Resets the adapter registry with new adapters and operators.
-///
-/// This function overwrites the existing supported adapters and operators lists.
-/// Only the authority can call this instruction.
-///
-/// # Arguments
-/// * `ctx` - Context containing the adapter registry account and authority.
-/// * `adapters` - New vector of adapter information.
-/// * `operators` - New vector of operator public keys.
-///
-/// # Returns
-/// * `Result<()>` - Returns Ok(()) on success, or an error if the authority is invalid.
 pub fn reset_adapter_registry(ctx: Context<ResetAdapterRegistry>, adapters: Vec<AdapterInfo>, operators: Vec<Pubkey>) -> Result<()> {
     let registry = &mut ctx.accounts.adapter_registry;
     registry.supported_adapters = adapters;
     registry.operators = operators;
 
-    emit_cpi!(
-        RegistryReset {
-            authority: ctx.accounts.authority.key(),
-        }
-    );
+    emit_cpi!(RegistryReset {
+        authority: ctx.accounts.authority.key(),
+    });
 
     Ok(())
 }
@@ -269,7 +146,7 @@ pub struct InitializeAdapterRegistry<'info> {
     #[account(
         init,
         payer = payer,
-        space = 8 + 32 + 4 + 10 * (4 + 32 + 32 + 4 + 10 * 32) + 4 + 10 * 32, // Space for 10 adapters and 10 operators
+        space = 8 + 32 + 4 + 10 * (4 + 32 + 32) + 4 + 10 * 32,
         seeds = [b"adapter_registry"],
         bump
     )]
@@ -277,6 +154,32 @@ pub struct InitializeAdapterRegistry<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Accounts for initializing a pool info account.
+#[event_cpi]
+#[derive(Accounts)]
+#[instruction(swap_type: Swap, pool_address: Pubkey)]
+pub struct InitializePoolInfo<'info> {
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + 4 + 32 + 1,
+        seeds = [b"pool_info", swap_type.to_bytes().as_ref(), pool_address.as_ref()],
+        bump
+    )]
+    pub pool_info: Account<'info, PoolInfo>,
+    #[account(
+        seeds = [b"adapter_registry"],
+        bump,
+        constraint = adapter_registry.authority == operator.key() || adapter_registry.operators.contains(&operator.key()) @ ErrorCode::InvalidOperator
+    )]
+    pub adapter_registry: Account<'info, AdapterRegistry>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(signer)]
+    pub operator: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -343,24 +246,15 @@ pub struct DisableAdapter<'info> {
 /// Accounts for disabling a pool in an adapter.
 #[event_cpi]
 #[derive(Accounts)]
+#[instruction(swap_type: Swap, pool_address: Pubkey)]
 pub struct DisablePool<'info> {
     #[account(
         mut,
-        seeds = [b"adapter_registry"],
-        bump,
-        constraint = adapter_registry.authority == operator.key() || adapter_registry.operators.contains(&operator.key()) @ ErrorCode::InvalidOperator
+        seeds = [b"pool_info", swap_type.to_bytes().as_ref(), pool_address.as_ref()],
+        bump
     )]
-    pub adapter_registry: Account<'info, AdapterRegistry>,
-    #[account(signer)]
-    pub operator: Signer<'info>,
-}
-
-/// Accounts for adding a new pool address to an adapter.
-#[event_cpi]
-#[derive(Accounts)]
-pub struct AddPoolAddress<'info> {
+    pub pool_info: Account<'info, PoolInfo>,
     #[account(
-        mut,
         seeds = [b"adapter_registry"],
         bump,
         constraint = adapter_registry.authority == operator.key() || adapter_registry.operators.contains(&operator.key()) @ ErrorCode::InvalidOperator

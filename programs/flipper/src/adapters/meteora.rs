@@ -1,0 +1,234 @@
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::Instruction;
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_spl::token::{Token, TokenAccount};
+use crate::adapters::{AdapterContext, DexAdapter};
+use crate::errors::ErrorCode;
+use crate::state::{Swap, SwapEvent, SwapResult, PoolInfo};
+
+/// Adapter for interacting with the Meteora DLMM protocol
+pub struct MeteoraAdapter {
+    pub program_id: Pubkey, // Meteora program ID for CPI calls
+}
+
+// Program IDs from anchor-spl
+const TOKEN_PROGRAM_ID: Pubkey = anchor_spl::token::ID;
+const TOKEN_2022_PROGRAM_ID: Pubkey = anchor_spl::token_2022::ID;
+
+
+/// Meteora swap2 instruction discriminator
+/// This is the first 8 bytes of the sha256 hash of "global:swap2"
+const SWAP2_DISCRIMINATOR: [u8; 8] = [65, 75, 63, 76, 235, 91, 91, 136];
+
+/// Arguments for Meteora swap2 instruction
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub struct Swap2Args {
+    pub in_amount: u64,                           // Amount of input tokens to swap
+    pub min_amount_out: u64,                      // Minimum amount of output tokens expected
+    pub remaining_accounts_info: RemainingAccountsInfo, // Info about remaining accounts (bin arrays)
+}
+
+/// Information about remaining accounts structure
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub struct RemainingAccountsInfo {
+    pub slices: Vec<RemainingAccountsSlice>,      // Array of account slices
+}
+
+/// Describes a slice of remaining accounts
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub struct RemainingAccountsSlice {
+    pub accounts_type: AccountsType,              // Type of accounts in this slice
+    pub length: u8,                               // Number of accounts in this slice
+}
+
+/// Types of accounts that can be in remaining accounts
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub enum AccountsType {
+    BinArrays,                                    // Bin array accounts for liquidity distribution
+}
+
+impl DexAdapter for MeteoraAdapter {
+    /// Execute a swap through Meteora DLMM protocol
+    fn execute_swap(
+        &self,
+        ctx: AdapterContext,
+        amount: u64,
+        remaining_accounts_start_index: usize,
+    ) -> Result<SwapResult> {
+        msg!("Executing Meteora swap2, amount: {}", amount);
+
+        // Ensure we have at least 16 required accounts for swap2
+        if ctx.remaining_accounts.len() < remaining_accounts_start_index + 16 {
+            return Err(ErrorCode::NotEnoughAccountKeys.into());
+        }
+
+        // Get slice of remaining accounts starting from our index for efficient access
+        let remaining_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..];
+
+        // Validate pool is enabled
+        let pool_info = Account::<PoolInfo>::try_from(&remaining_accounts[0])?;
+        if !pool_info.enabled {
+            return Err(ErrorCode::PoolDisabled.into());
+        }
+
+        // Calculate number of bin arrays available (maximum 10 for Meteora)
+        let bin_arrays_count = (remaining_accounts.len() - 16).min(10) as u8;
+
+        // Record initial output token balance for calculating swap result
+        let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
+        let initial_output_amount = output_vault_data.amount;
+
+        // Create swap2 instruction arguments
+        let swap_args = Swap2Args {
+            in_amount: amount,
+            min_amount_out: 0, // No slippage protection in this example
+            remaining_accounts_info: RemainingAccountsInfo {
+                slices: vec![RemainingAccountsSlice {
+                    accounts_type: AccountsType::BinArrays,
+                    length: bin_arrays_count,
+                }],
+            },
+        };
+
+        // Prepare instruction data with discriminator and serialized arguments
+        let mut instruction_data = Vec::new();
+        instruction_data.extend_from_slice(&SWAP2_DISCRIMINATOR);
+        instruction_data.extend_from_slice(&swap_args.try_to_vec()?);
+
+        // Build account metas for the instruction
+        // Order must match Meteora swap2 interface exactly
+        let mut accounts = vec![
+            AccountMeta::new(remaining_accounts[1].key(), false),       // lb_pair
+            AccountMeta::new_readonly(remaining_accounts[2].key(), false), // bin_array_bitmap_extension
+            AccountMeta::new(remaining_accounts[3].key(), false),       // reserve_x
+            AccountMeta::new(remaining_accounts[4].key(), false),       // reserve_y
+            AccountMeta::new(ctx.input_account.key(), false),           // user_token_in
+            AccountMeta::new(ctx.output_account.key(), false),          // user_token_out
+            AccountMeta::new_readonly(remaining_accounts[5].key(), false), // token_x_mint
+            AccountMeta::new_readonly(remaining_accounts[6].key(), false), // token_y_mint
+            AccountMeta::new(remaining_accounts[7].key(), false),       // oracle
+            AccountMeta::new(remaining_accounts[8].key(), false),       // host_fee_account
+            AccountMeta::new_readonly(ctx.authority.key(), true),       // user (signer)
+            AccountMeta::new_readonly(remaining_accounts[9].key(), false), // token_x_program
+            AccountMeta::new_readonly(remaining_accounts[10].key(), false), // token_y_program
+            AccountMeta::new_readonly(remaining_accounts[11].key(), false), // memo_program
+            AccountMeta::new_readonly(remaining_accounts[12].key(), false), // event_authority
+            AccountMeta::new_readonly(remaining_accounts[13].key(), false), // program
+        ];
+
+        // Add bin arrays to account metas (dynamic part)
+        for i in 0..bin_arrays_count {
+            accounts.push(AccountMeta::new(remaining_accounts[16 + i as usize].key(), false));
+        }
+
+        // Build AccountInfo vector (not references)
+        let mut account_infos = vec![
+            remaining_accounts[1].clone(),   // lb_pair
+            remaining_accounts[2].clone(),   // bin_array_bitmap_extension
+            remaining_accounts[3].clone(),   // reserve_x
+            remaining_accounts[4].clone(),   // reserve_y
+            ctx.input_account.clone(),       // user_token_in
+            ctx.output_account.clone(),      // user_token_out
+            remaining_accounts[5].clone(),   // token_x_mint
+            remaining_accounts[6].clone(),   // token_y_mint
+            remaining_accounts[7].clone(),   // oracle
+            remaining_accounts[8].clone(),   // host_fee_account
+            ctx.authority.clone(),           // user
+            remaining_accounts[9].clone(),   // token_x_program
+            remaining_accounts[10].clone(),  // token_y_program
+            remaining_accounts[11].clone(),  // memo_program
+            remaining_accounts[12].clone(),  // event_authority
+            remaining_accounts[13].clone(),  // program
+        ];
+
+        // Add dynamic bin arrays
+        for i in 0..bin_arrays_count {
+            account_infos.push(remaining_accounts[16 + i as usize].clone());
+        }
+
+        // Create the instruction
+        let instruction = Instruction {
+            program_id: self.program_id,
+            accounts,
+            data: instruction_data,
+        };
+
+        // Execute CPI call with proper signer seeds
+        let (vault_authority_pda, vault_authority_bump) = Pubkey::find_program_address(
+            &[b"vault_authority"],
+            &ctx.program_id,
+        );
+
+        let authority_seeds: &[&[u8]] = &[b"vault_authority", &[vault_authority_bump]];
+        let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
+
+        invoke_signed(&instruction, &account_infos, signer_seeds)?;
+
+        // Calculate output amount by checking balance difference
+        let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
+        let output_amount = output_vault_data.amount
+            .checked_sub(initial_output_amount)
+            .ok_or(ErrorCode::InvalidCalculation)?;
+
+        msg!("Meteora swap2 completed, output amount: {}", output_amount);
+
+        Ok(SwapResult { output_amount })
+    }
+
+    /// Validate that all required accounts are provided and valid
+    fn validate_accounts(
+        &self,
+        ctx: AdapterContext,
+        remaining_accounts_start_index: usize,
+    ) -> Result<()> {
+        // Ensure minimum required accounts are present
+        if ctx.remaining_accounts.len() < remaining_accounts_start_index + 16 {
+            return Err(ErrorCode::NotEnoughAccountKeys.into());
+        }
+
+        // Get efficient slice access
+        let remaining_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..];
+
+        // Validate pool is enabled and matches expected address
+        let pool_info = Account::<PoolInfo>::try_from(&remaining_accounts[0])?;
+        if !pool_info.enabled {
+            return Err(ErrorCode::PoolDisabled.into());
+        }
+
+        let lb_pair = &remaining_accounts[1];
+        if pool_info.pool_address != lb_pair.key() {
+            return Err(ErrorCode::InvalidPoolAddress.into());
+        }
+
+        // Validate token programs are correct (SPL Token or Token2022)
+        let token_x_program = &remaining_accounts[9];
+        let token_y_program = &remaining_accounts[10];
+        let program = &remaining_accounts[13];
+
+        if program.key() != self.program_id {
+            return Err(ErrorCode::InvalidCpiInterface.into());
+        }
+
+        let valid_token_programs = [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID];
+        if !valid_token_programs.contains(&token_x_program.key())
+            || !valid_token_programs.contains(&token_y_program.key())
+        {
+            return Err(ErrorCode::InvalidCpiInterface.into());
+        }
+
+        // Ensure critical accounts are not default (empty) pubkeys
+        if lb_pair.key() == Pubkey::default() {
+            return Err(ErrorCode::InvalidAccount.into());
+        }
+
+        Ok(())
+    }
+
+    /// Validate CPI call is targeting correct program
+    fn validate_cpi(&self, program_id: &Pubkey) -> Result<()> {
+        if *program_id != self.program_id {
+            return Err(ErrorCode::InvalidCpiInterface.into());
+        }
+        Ok(())
+    }
+}

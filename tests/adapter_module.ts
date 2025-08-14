@@ -1,7 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program, AnchorProvider, web3, BN } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, createMint, createAccount, mintTo, getAccount } from "@solana/spl-token";
+import { PublicKey, Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID, createMint, createAssociatedTokenAccount, mintTo, getAccount, getMinimumBalanceForRentExemptAccount } from "@solana/spl-token";
 import { assert } from "chai";
 import { Flipper } from "../target/types/flipper";
 
@@ -34,8 +34,26 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
     let tickArray1: PublicKey;
     let tickArray2: PublicKey;
     let oracle: PublicKey;
+    let vaultAuthority: PublicKey;
+    let inputVault: PublicKey;
+    let outputVault: PublicKey;
+    let vaultAuthorityBump: number;
+    let inputVaultBump: number;
+    let outputVaultBump: number;
     let bump: number;
     let isRegistryInitialized = false;
+
+    // Helper function to generate swapType bytes matching Rust to_bytes
+    function getSwapTypeBytes(swapType: any): Buffer {
+        const bytes = Buffer.alloc(32, 0); // Initialize 32-byte array with zeros
+        if ("raydium" in swapType) {
+            bytes[0] = 7; // Raydium variant index
+        } else if ("whirlpool" in swapType) {
+            bytes[0] = 17; // Whirlpool variant index
+            bytes[1] = swapType.whirlpool.aToB ? 1 : 0; // aToB boolean
+        }
+        return bytes;
+    }
 
     before(async () => {
         try {
@@ -51,13 +69,78 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
                 50_000_000_000 // 50 SOL to cover account creation
             );
             await provider.connection.confirmTransaction(airdropSignature);
-            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for airdrop confirmation
+
+            // Fund the operator account with SOL
+            const operatorAirdropSignature = await provider.connection.requestAirdrop(
+                operator.publicKey,
+                5_000_000_000 // 5 SOL
+            );
+            await provider.connection.confirmTransaction(operatorAirdropSignature);
+
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for airdrop confirmation
 
             // Derive adapter registry PDA
             [adapterRegistry, bump] = await PublicKey.findProgramAddress(
                 [Buffer.from("adapter_registry")],
                 program.programId
             );
+
+            // Derive vault authority PDA
+            [vaultAuthority, vaultAuthorityBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("vault_authority")],
+                program.programId
+            );
+
+            // Create mints
+            sourceMint = await createMint(
+                provider.connection,
+                payer,
+                payer.publicKey,
+                null,
+                9
+            );
+            destinationMint = await createMint(
+                provider.connection,
+                payer,
+                payer.publicKey,
+                null,
+                9
+            );
+
+            // Derive vault PDAs
+            [inputVault, inputVaultBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("vault"), sourceMint.toBuffer()],
+                program.programId
+            );
+            [outputVault, outputVaultBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("vault"), destinationMint.toBuffer()],
+                program.programId
+            );
+
+            // Create user token accounts
+            userSourceTokenAccount = await createAssociatedTokenAccount(
+                provider.connection,
+                payer,
+                sourceMint,
+                provider.wallet.publicKey
+            );
+            userDestinationTokenAccount = await createAssociatedTokenAccount(
+                provider.connection,
+                payer,
+                destinationMint,
+                provider.wallet.publicKey
+            );
+
+            // Mint tokens to user account
+            await mintTo(
+                provider.connection,
+                payer,
+                sourceMint,
+                userSourceTokenAccount,
+                payer,
+                1000000
+            );
+
         } catch (error) {
             if (error instanceof anchor.web3.SendTransactionError) {
                 const logs = await error.getLogs(provider.connection);
@@ -83,6 +166,28 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
             tickArray2 = Keypair.generate().publicKey;
             oracle = Keypair.generate().publicKey;
 
+            // Check if vaults exist, if not initialize them
+            const inputVaultAccountInfo = await provider.connection.getAccountInfo(inputVault);
+            const outputVaultAccountInfo = await provider.connection.getAccountInfo(outputVault);
+
+            if (!inputVaultAccountInfo || !outputVaultAccountInfo) {
+                // Initialize vaults using your method with payer as signer
+                await program.methods
+                    .initializeVaults()
+                    .accounts({
+                        vaultAuthority,
+                        payer: payer.publicKey,
+                        inputVault,
+                        outputVault,
+                        sourceMint,
+                        destinationMint,
+                        tokenProgram: TOKEN_PROGRAM_ID,
+                        systemProgram: SystemProgram.programId,
+                    })
+                    .signers([payer]) // Only payer signs, vault_authority is a PDA
+                    .rpc();
+            }
+
             // Check if adapter_registry account exists
             const accountInfo = await provider.connection.getAccountInfo(adapterRegistry);
             if (!accountInfo && !isRegistryInitialized) {
@@ -94,13 +199,11 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
                                 name: "Raydium",
                                 programId: raydiumProgramId,
                                 swapType: { raydium: {} },
-                                poolAddresses: [poolAddress],
                             },
                             {
                                 name: "Whirlpool",
                                 programId: whirlpoolProgramId,
                                 swapType: { whirlpool: { aToB: true } },
-                                poolAddresses: [poolAddress],
                             },
                         ],
                         [operator.publicKey]
@@ -114,12 +217,12 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
                     .signers([payer, initialAuthority])
                     .rpc();
                 isRegistryInitialized = true;
-            } else {
+            } else if (accountInfo) {
                 // Fetch current authority from adapter_registry
                 const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
                 const currentAuthorityPubkey = registryAccount.authority;
 
-                // Use the current authority for reset (default to initialAuthority if not changed)
+                // Use the current authority for reset
                 const authorityToUse = currentAuthorityPubkey.equals(initialAuthority.publicKey)
                     ? initialAuthority
                     : currentAuthority;
@@ -132,13 +235,11 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
                                 name: "Raydium",
                                 programId: raydiumProgramId,
                                 swapType: { raydium: {} },
-                                poolAddresses: [poolAddress],
                             },
                             {
                                 name: "Whirlpool",
                                 programId: whirlpoolProgramId,
                                 swapType: { whirlpool: { aToB: true } },
-                                poolAddresses: [poolAddress],
                             },
                         ],
                         [operator.publicKey]
@@ -150,53 +251,15 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
                     .signers([authorityToUse])
                     .rpc();
             }
-
-            // Create mints and token accounts for swap tests
-            const mintAuthority = Keypair.generate();
-            sourceMint = await createMint(
-                provider.connection,
-                payer,
-                mintAuthority.publicKey,
-                mintAuthority.publicKey,
-                6
-            );
-            destinationMint = await createMint(
-                provider.connection,
-                payer,
-                mintAuthority.publicKey,
-                mintAuthority.publicKey,
-                6
-            );
-            userSourceTokenAccount = await createAccount(
-                provider.connection,
-                payer,
-                sourceMint,
-                provider.wallet.publicKey
-            );
-            userDestinationTokenAccount = await createAccount(
-                provider.connection,
-                payer,
-                destinationMint,
-                provider.wallet.publicKey
-            );
-
-            // Fund source token account
-            await mintTo(
-                provider.connection,
-                payer,
-                sourceMint,
-                userSourceTokenAccount,
-                mintAuthority,
-                1_000_000
-            );
         } catch (error) {
             if (error instanceof anchor.web3.SendTransactionError) {
                 const logs = await error.getLogs(provider.connection);
-                console.error("Transaction failed in beforeEach. Logs:", logs);
+                console.error("Transaction failed in beforeEach hook. Logs:", logs);
             }
             throw error;
         }
     });
+
 
     it("Initializes adapter registry correctly", async () => {
         const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
@@ -208,13 +271,303 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
         assert.equal(registryAccount.supportedAdapters[1].name, "Whirlpool");
     });
 
+
+    it("Initializes pool info for Raydium", async () => {
+        try {
+            const swapTypeBytes = getSwapTypeBytes({ raydium: {} });
+            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .initializePoolInfo({ raydium: {} }, poolAddress)
+                .accounts({
+                    poolInfo,
+                    adapterRegistry,
+                    payer: payer.publicKey,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([payer, operator])
+                .rpc();
+
+            const poolInfoAccount = await program.account.poolInfo.fetch(poolInfo);
+            assert.equal(poolInfoAccount.poolAddress.toBase58(), poolAddress.toBase58());
+            assert.isTrue(poolInfoAccount.enabled);
+            assert.deepEqual(poolInfoAccount.adapterSwapType, { raydium: {} });
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in Raydium pool info test. Logs:", logs);
+            }
+            throw error;
+        }
+    });
+
+    it("Initializes pool info for Whirlpool", async () => {
+        try {
+            const swapTypeBytes = getSwapTypeBytes({ whirlpool: { aToB: true } });
+            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .initializePoolInfo({ whirlpool: { aToB: true } }, poolAddress)
+                .accounts({
+                    poolInfo,
+                    adapterRegistry,
+                    payer: payer.publicKey,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([payer, operator])
+                .rpc();
+
+            const poolInfoAccount = await program.account.poolInfo.fetch(poolInfo);
+            assert.equal(poolInfoAccount.poolAddress.toBase58(), poolAddress.toBase58());
+            assert.isTrue(poolInfoAccount.enabled);
+            assert.deepEqual(poolInfoAccount.adapterSwapType, { whirlpool: { aToB: true } });
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in Whirlpool pool info test. Logs:", logs);
+            }
+            throw error;
+        }
+    });
+
+    it("Executes a Whirlpool swap", async () => {
+        try {
+            // Initialize PoolInfo account
+            const swapTypeBytes = getSwapTypeBytes({ whirlpool: { aToB: true } });
+            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .initializePoolInfo({ whirlpool: { aToB: true } }, poolAddress)
+                .accounts({
+                    poolInfo,
+                    adapterRegistry,
+                    payer: payer.publicKey,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([payer, operator])
+                .rpc();
+
+            // Mint tokens to inputVault for testing
+            await mintTo(
+                provider.connection,
+                payer,
+                sourceMint,
+                inputVault,
+                payer,
+                1000
+            );
+
+            const routePlan = [
+                {
+                    swap: { whirlpool: { aToB: true } },
+                    percent: 100,
+                    inputIndex: 0,
+                    outputIndex: 3, // Adjusted for poolInfo and pool account
+                },
+            ];
+
+            const inAmount = new BN(1000);
+            const quotedOutAmount = new BN(1000); // Placeholder: same as input due to mock
+            const slippageBps = 500; // 5%
+            const platformFeeBps = 0;
+
+            const remainingAccounts = [
+                { pubkey: inputVault, isSigner: false, isWritable: true }, // input_index: 0
+                { pubkey: poolInfo, isSigner: false, isWritable: false }, // input_index + 1
+                { pubkey: poolAddress, isSigner: false, isWritable: true }, // input_index + 2
+                { pubkey: outputVault, isSigner: false, isWritable: true }, // output_index: 3
+                { pubkey: tokenVaultA, isSigner: false, isWritable: true },
+                { pubkey: tokenVaultB, isSigner: false, isWritable: true },
+                { pubkey: tickArray0, isSigner: false, isWritable: true },
+                { pubkey: tickArray1, isSigner: false, isWritable: true },
+                { pubkey: tickArray2, isSigner: false, isWritable: true },
+                { pubkey: oracle, isSigner: false, isWritable: false },
+            ];
+
+            await program.methods
+                .route(routePlan, inAmount, quotedOutAmount, slippageBps, platformFeeBps)
+                .accounts({
+                    adapterRegistry,
+                    vaultAuthority,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    userTransferAuthority: provider.wallet.publicKey,
+                    userSourceTokenAccount,
+                    userDestinationTokenAccount,
+                    sourceMint,
+                    destinationMint,
+                    platformFeeAccount: null,
+                })
+                .remainingAccounts(remainingAccounts)
+                .rpc();
+
+            // Since execute_swap is a placeholder, no tokens are transferred
+            const destinationAccount = await getAccount(provider.connection, userDestinationTokenAccount);
+            assert.equal(destinationAccount.amount.toString(), "0");
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in Whirlpool swap test. Logs:", logs);
+            }
+            throw error;
+        }
+    });
+
+    it("Fails with invalid pool address", async () => {
+        try {
+            // Initialize PoolInfo account
+            const swapTypeBytes = getSwapTypeBytes({ raydium: {} });
+            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .initializePoolInfo({ raydium: {} }, poolAddress)
+                .accounts({
+                    poolInfo,
+                    adapterRegistry,
+                    payer: payer.publicKey,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([payer, operator])
+                .rpc();
+
+            // Mint tokens to inputVault for testing
+            await mintTo(
+                provider.connection,
+                payer,
+                sourceMint,
+                inputVault,
+                payer,
+                1000
+            );
+
+            const routePlan = [
+                {
+                    swap: { raydium: {} },
+                    percent: 100,
+                    inputIndex: 0,
+                    outputIndex: 3, // Adjusted for poolInfo and pool account
+                },
+            ];
+
+            const invalidPoolAddress = Keypair.generate().publicKey;
+
+            const remainingAccounts = [
+                { pubkey: inputVault, isSigner: false, isWritable: true }, // input_index: 0
+                { pubkey: poolInfo, isSigner: false, isWritable: false }, // input_index + 1
+                { pubkey: invalidPoolAddress, isSigner: false, isWritable: true }, // input_index + 2
+                { pubkey: outputVault, isSigner: false, isWritable: true }, // output_index: 3
+                { pubkey: tokenVaultA, isSigner: false, isWritable: true },
+                { pubkey: tokenVaultB, isSigner: false, isWritable: true },
+                { pubkey: ammConfig, isSigner: false, isWritable: false },
+                { pubkey: poolAuthority, isSigner: false, isWritable: false },
+            ];
+
+            await program.methods
+                .route(routePlan, new BN(1000), new BN(1000), 500, 0)
+                .accounts({
+                    adapterRegistry,
+                    vaultAuthority,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    userTransferAuthority: provider.wallet.publicKey,
+                    userSourceTokenAccount,
+                    userDestinationTokenAccount,
+                    sourceMint,
+                    destinationMint,
+                    platformFeeAccount: null,
+                })
+                .remainingAccounts(remainingAccounts)
+                .rpc();
+            assert.fail("Should have failed with invalid pool address");
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in invalid pool address test. Logs:", logs);
+            }
+            assert.include(error.message, "InvalidPoolAddress");
+        }
+    });
+
+    it("Fails with insufficient accounts for Whirlpool", async () => {
+        try {
+            // Initialize PoolInfo account
+            const swapTypeBytes = getSwapTypeBytes({ whirlpool: { aToB: true } });
+            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .initializePoolInfo({ whirlpool: { aToB: true } }, poolAddress)
+                .accounts({
+                    poolInfo,
+                    adapterRegistry,
+                    payer: payer.publicKey,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([payer, operator])
+                .rpc();
+
+            const routePlan = [
+                {
+                    swap: { whirlpool: { aToB: true } },
+                    percent: 100,
+                    inputIndex: 0,
+                    outputIndex: 1,
+                },
+            ];
+
+            const remainingAccounts = [
+                { pubkey: userSourceTokenAccount, isSigner: false, isWritable: true },
+                { pubkey: userDestinationTokenAccount, isSigner: false, isWritable: true },
+            ];
+
+            await program.methods
+                .route(routePlan, new BN(1000), new BN(1000), 500, 0)
+                .accounts({
+                    adapterRegistry,
+                    vaultAuthority,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    userTransferAuthority: provider.wallet.publicKey,
+                    userSourceTokenAccount,
+                    userDestinationTokenAccount,
+                    sourceMint,
+                    destinationMint,
+                    platformFeeAccount: null,
+                })
+                .remainingAccounts(remainingAccounts)
+                .rpc();
+            assert.fail("Should have failed with insufficient accounts");
+        } catch (error) {
+            if (error instanceof anchor.web3.SendTransactionError) {
+                const logs = await error.getLogs(provider.connection);
+                console.error("Transaction failed in insufficient accounts test. Logs:", logs);
+            }
+            assert.include(error.message, "NotEnoughAccountKeys");
+        }
+    });
+
     it("Configures a new adapter as operator", async () => {
         const newProgramId = Keypair.generate().publicKey;
         const newAdapter = {
             name: "NewAdapter",
             programId: newProgramId,
             swapType: { raydium: {} },
-            poolAddresses: [poolAddress],
         };
 
         try {
@@ -246,7 +599,6 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
             name: "UnauthorizedAdapter",
             programId: newProgramId,
             swapType: { raydium: {} },
-            poolAddresses: [poolAddress],
         };
 
         try {
@@ -313,19 +665,38 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
 
     it("Disables a pool address as operator", async () => {
         try {
+            // Сначала инициализируем pool info
+            const swapTypeBytes = getSwapTypeBytes({ raydium: {} });
+            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .initializePoolInfo({ raydium: {} }, poolAddress)
+                .accounts({
+                    poolInfo,
+                    adapterRegistry,
+                    payer: payer.publicKey,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([payer, operator])
+                .rpc();
+
+            // Теперь отключаем pool
             await program.methods
                 .disablePool({ raydium: {} }, poolAddress)
                 .accounts({
+                    poolInfo,
                     adapterRegistry,
                     operator: operator.publicKey,
                 })
                 .signers([operator])
                 .rpc();
 
-            const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
-            const raydiumAdapter = registryAccount.supportedAdapters.find(a => a.name === "Raydium");
-            assert.isDefined(raydiumAdapter);
-            assert.equal(raydiumAdapter.poolAddresses.length, 0);
+            const poolInfoAccount = await program.account.poolInfo.fetch(poolInfo);
+            assert.isFalse(poolInfoAccount.enabled);
         } catch (error) {
             if (error instanceof anchor.web3.SendTransactionError) {
                 const logs = await error.getLogs(provider.connection);
@@ -337,9 +708,29 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
 
     it("Fails to disable pool with unauthorized account", async () => {
         try {
+            // Инициализируем pool info
+            const swapTypeBytes = getSwapTypeBytes({ raydium: {} });
+            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .initializePoolInfo({ raydium: {} }, poolAddress)
+                .accounts({
+                    poolInfo,
+                    adapterRegistry,
+                    payer: payer.publicKey,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([payer, operator])
+                .rpc();
+
             await program.methods
                 .disablePool({ raydium: {} }, poolAddress)
                 .accounts({
+                    poolInfo,
                     adapterRegistry,
                     operator: unauthorized.publicKey,
                 })
@@ -350,50 +741,6 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
             if (error instanceof anchor.web3.SendTransactionError) {
                 const logs = await error.getLogs(provider.connection);
                 console.error("Transaction failed in unauthorized disablePool test. Logs:", logs);
-            }
-            assert.include(error.message, "InvalidOperator");
-        }
-    });
-
-    it("Adds a new pool address as operator", async () => {
-        try {
-            await program.methods
-                .addPoolAddress({ raydium: {} }, newPoolAddress)
-                .accounts({
-                    adapterRegistry,
-                    operator: operator.publicKey,
-                })
-                .signers([operator])
-                .rpc();
-
-            const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
-            const raydiumAdapter = registryAccount.supportedAdapters.find(a => a.name === "Raydium");
-            assert.isDefined(raydiumAdapter);
-            assert.isTrue(raydiumAdapter.poolAddresses.some(addr => addr.equals(newPoolAddress)));
-        } catch (error) {
-            if (error instanceof anchor.web3.SendTransactionError) {
-                const logs = await error.getLogs(provider.connection);
-                console.error("Transaction failed in addPoolAddress test. Logs:", logs);
-            }
-            throw error;
-        }
-    });
-
-    it("Fails to add pool address with unauthorized account", async () => {
-        try {
-            await program.methods
-                .addPoolAddress({ raydium: {} }, newPoolAddress)
-                .accounts({
-                    adapterRegistry,
-                    operator: unauthorized.publicKey,
-                })
-                .signers([unauthorized])
-                .rpc();
-            assert.fail("Should have failed with unauthorized account");
-        } catch (error) {
-            if (error instanceof anchor.web3.SendTransactionError) {
-                const logs = await error.getLogs(provider.connection);
-                console.error("Transaction failed in unauthorized addPoolAddress test. Logs:", logs);
             }
             assert.include(error.message, "InvalidOperator");
         }
@@ -532,205 +879,4 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
         }
     });
 
-    it("Executes a single Raydium swap", async () => {
-        const routePlan = [
-            {
-                swap: { raydium: {} },
-                percent: 100,
-                inputIndex: 0,
-                outputIndex: 1,
-            },
-        ];
-
-        const inAmount = new BN(1000);
-        const quotedOutAmount = new BN(1000); // Placeholder: same as input due to mock
-        const slippageBps = 500; // 5%
-        const platformFeeBps = 0;
-
-        try {
-            const remainingAccounts = [
-                { pubkey: userSourceTokenAccount, isSigner: false, isWritable: true },
-                { pubkey: userDestinationTokenAccount, isSigner: false, isWritable: true },
-                { pubkey: poolAddress, isSigner: false, isWritable: true },
-                { pubkey: tokenVaultA, isSigner: false, isWritable: true },
-                { pubkey: tokenVaultB, isSigner: false, isWritable: true },
-                { pubkey: ammConfig, isSigner: false, isWritable: false },
-                { pubkey: poolAuthority, isSigner: false, isWritable: false },
-                { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false }, // Extra account for safety
-            ];
-
-            await program.methods
-                .route(routePlan, inAmount, quotedOutAmount, slippageBps, platformFeeBps)
-                .accounts({
-                    adapterRegistry,
-                    tokenProgram: TOKEN_PROGRAM_ID,
-                    userTransferAuthority: provider.wallet.publicKey,
-                    userSourceTokenAccount,
-                    userDestinationTokenAccount,
-                    sourceMint,
-                    destinationMint,
-                    destinationTokenAccount: null,
-                    platformFeeAccount: null,
-                })
-                .remainingAccounts(remainingAccounts)
-                .rpc();
-
-            // Since execute_swap is a placeholder, no tokens are transferred
-            const destinationAccount = await getAccount(provider.connection, userDestinationTokenAccount);
-            assert.equal(destinationAccount.amount.toString(), "0");
-        } catch (error) {
-            if (error instanceof anchor.web3.SendTransactionError) {
-                const logs = await error.getLogs(provider.connection);
-                console.error("Transaction failed in Raydium swap test. Logs:", logs);
-            }
-            throw error;
-        }
-    });
-
-    it("Executes a Whirlpool swap", async () => {
-        const routePlan = [
-            {
-                swap: { whirlpool: { aToB: true } },
-                percent: 100,
-                inputIndex: 0,
-                outputIndex: 1,
-            },
-        ];
-
-        const inAmount = new BN(1000);
-        const quotedOutAmount = new BN(1000); // Placeholder: same as input due to mock
-        const slippageBps = 500; // 5%
-        const platformFeeBps = 0;
-
-        try {
-            const remainingAccounts = [
-                { pubkey: userSourceTokenAccount, isSigner: false, isWritable: true },
-                { pubkey: userDestinationTokenAccount, isSigner: false, isWritable: true },
-                { pubkey: poolAddress, isSigner: false, isWritable: true },
-                { pubkey: tokenVaultA, isSigner: false, isWritable: true },
-                { pubkey: tokenVaultB, isSigner: false, isWritable: true },
-                { pubkey: tickArray0, isSigner: false, isWritable: true },
-                { pubkey: tickArray1, isSigner: false, isWritable: true },
-                { pubkey: tickArray2, isSigner: false, isWritable: true },
-                { pubkey: oracle, isSigner: false, isWritable: false },
-                { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false }, // Extra account for safety
-            ];
-
-            await program.methods
-                .route(routePlan, inAmount, quotedOutAmount, slippageBps, platformFeeBps)
-                .accounts({
-                    adapterRegistry,
-                    tokenProgram: TOKEN_PROGRAM_ID,
-                    userTransferAuthority: provider.wallet.publicKey,
-                    userSourceTokenAccount,
-                    userDestinationTokenAccount,
-                    sourceMint,
-                    destinationMint,
-                    destinationTokenAccount: null,
-                    platformFeeAccount: null,
-                })
-                .remainingAccounts(remainingAccounts)
-                .rpc();
-
-            // Since execute_swap is a placeholder, no tokens are transferred
-            const destinationAccount = await getAccount(provider.connection, userDestinationTokenAccount);
-            assert.equal(destinationAccount.amount.toString(), "0");
-        } catch (error) {
-            if (error instanceof anchor.web3.SendTransactionError) {
-                const logs = await error.getLogs(provider.connection);
-                console.error("Transaction failed in Whirlpool swap test. Logs:", logs);
-            }
-            throw error;
-        }
-    });
-
-    it("Fails with invalid pool address", async () => {
-        const routePlan = [
-            {
-                swap: { raydium: {} },
-                percent: 100,
-                inputIndex: 0,
-                outputIndex: 1,
-            },
-        ];
-
-        const invalidPoolAddress = Keypair.generate().publicKey;
-
-        try {
-            const remainingAccounts = [
-                { pubkey: userSourceTokenAccount, isSigner: false, isWritable: true },
-                { pubkey: userDestinationTokenAccount, isSigner: false, isWritable: true },
-                { pubkey: invalidPoolAddress, isSigner: false, isWritable: true },
-                { pubkey: tokenVaultA, isSigner: false, isWritable: true },
-                { pubkey: tokenVaultB, isSigner: false, isWritable: true },
-                { pubkey: ammConfig, isSigner: false, isWritable: false },
-                { pubkey: poolAuthority, isSigner: false, isWritable: false },
-                { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false }, // Extra account for safety
-            ];
-
-            await program.methods
-                .route(routePlan, new BN(1000), new BN(1000), 500, 0)
-                .accounts({
-                    adapterRegistry,
-                    tokenProgram: TOKEN_PROGRAM_ID,
-                    userTransferAuthority: provider.wallet.publicKey,
-                    userSourceTokenAccount,
-                    userDestinationTokenAccount,
-                    sourceMint,
-                    destinationMint,
-                    destinationTokenAccount: null,
-                    platformFeeAccount: null,
-                })
-                .remainingAccounts(remainingAccounts)
-                .rpc();
-            assert.fail("Should have failed with invalid pool address");
-        } catch (error) {
-            if (error instanceof anchor.web3.SendTransactionError) {
-                const logs = await error.getLogs(provider.connection);
-                console.error("Transaction failed in invalid pool address test. Logs:", logs);
-            }
-            assert.include(error.message, "InvalidPoolAddress");
-        }
-    });
-
-    it("Fails with insufficient accounts for Whirlpool", async () => {
-        const routePlan = [
-            {
-                swap: { whirlpool: { aToB: true } },
-                percent: 100,
-                inputIndex: 0,
-                outputIndex: 1,
-            },
-        ];
-
-        try {
-            const remainingAccounts = [
-                { pubkey: userSourceTokenAccount, isSigner: false, isWritable: true },
-                { pubkey: userDestinationTokenAccount, isSigner: false, isWritable: true },
-            ];
-
-            await program.methods
-                .route(routePlan, new BN(1000), new BN(1000), 500, 0)
-                .accounts({
-                    adapterRegistry,
-                    tokenProgram: TOKEN_PROGRAM_ID,
-                    userTransferAuthority: provider.wallet.publicKey,
-                    userSourceTokenAccount,
-                    userDestinationTokenAccount,
-                    sourceMint,
-                    destinationMint,
-                    destinationTokenAccount: null,
-                    platformFeeAccount: null,
-                })
-                .remainingAccounts(remainingAccounts)
-                .rpc();
-            assert.fail("Should have failed with insufficient accounts");
-        } catch (error) {
-            if (error instanceof anchor.web3.SendTransactionError) {
-                const logs = await error.getLogs(provider.connection);
-                console.error("Transaction failed in insufficient accounts test. Logs:", logs);
-            }
-            assert.include(error.message, "NotEnoughAccountKeys");
-        }
-    });
 });

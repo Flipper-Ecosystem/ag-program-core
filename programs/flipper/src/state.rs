@@ -9,6 +9,14 @@ pub struct AdapterRegistry {
     pub supported_adapters: Vec<AdapterInfo>, // List of supported DEX adapters
 }
 
+// Stores information about a single pool
+#[account]
+pub struct PoolInfo {
+    pub adapter_swap_type: Swap, // The swap type of the adapter this pool belongs to
+    pub pool_address: Pubkey,   // The pool's public key
+    pub enabled: bool,          // Whether the pool is enabled or disabled
+}
+
 // Implementation of methods for AdapterRegistry
 impl AdapterRegistry {
     // Checks if a swap type is supported by the registry
@@ -49,9 +57,7 @@ pub struct AdapterInfo {
     pub name: String,                // Name of the adapter (e.g., "Raydium")
     pub program_id: Pubkey,          // Program ID of the DEX protocol
     pub swap_type: Swap,             // Type of swap (e.g., Raydium, Whirlpool)
-    pub pool_addresses: Vec<Pubkey>, // Valid pool addresses for the adapter
 }
-
 
 // Event emitted when an adapter is configured in the registry
 #[event]
@@ -73,11 +79,11 @@ pub struct PoolDisabled {
     pub pool_address: Pubkey, // Pool address that was disabled
 }
 
-// Event emitted when a new pool address is added to an adapter
+// Event emitted when a new pool is initialized
 #[event]
-pub struct PoolAdded {
+pub struct PoolInitialized {
     pub swap_type: Swap,    // Type of swap for the adapter
-    pub pool_address: Pubkey, // Pool address that was added
+    pub pool_address: Pubkey, // Pool address that was initialized
 }
 
 // Event emitted when the authority of the registry is changed
@@ -116,6 +122,7 @@ pub struct SwapEvent {
     pub output_mint: Pubkey, // Mint of the output token
     pub output_amount: u64,  // Amount of output tokens
 }
+
 #[event]
 pub struct RegistryReset {
     pub authority: Pubkey,
@@ -132,28 +139,123 @@ pub enum Swap {
     Step,
     Cropper,
     Raydium,
-    Crema { a_to_b: bool }, // Swap direction for Crema
+    Crema { a_to_b: bool },
     Lifinity,
     Mercurial,
     Cykura,
-    Serum { side: Side }, // Bid or Ask side for Serum
+    Serum { side: Side },
     MarinadeDeposit,
     MarinadeUnstake,
-    Aldrin { side: Side }, // Bid or Ask side for Aldrin
-    AldrinV2 { side: Side }, // Bid or Ask side for AldrinV2
-    Whirlpool { a_to_b: bool }, // Swap direction for Whirlpool
-    Invariant { x_to_y: bool }, // Swap direction for Invariant
+    Aldrin { side: Side },
+    AldrinV2 { side: Side },
+    Whirlpool { a_to_b: bool },
+    Invariant { x_to_y: bool },
     Meteora,
     GooseFX,
-    DeltaFi { stable: bool }, // Stable or volatile pool for DeltaFi
+    DeltaFi { stable: bool },
     Balansol,
-    MarcoPolo { x_to_y: bool }, // Swap direction for MarcoPolo
-    Dradex { side: Side }, // Bid or Ask side for Dradex
+    MarcoPolo { x_to_y: bool },
+    Dradex { side: Side },
     LifinityV2,
     RaydiumClmm,
-    Openbook { side: Side }, // Bid or Ask side for Openbook
-    Phoenix { side: Side }, // Bid or Ask side for Phoenix
-    Symmetry { from_token_id: u64, to_token_id: u64 }, // Token IDs for Symmetry
+    Openbook { side: Side },
+    Phoenix { side: Side },
+    Symmetry { from_token_id: u64, to_token_id: u64 },
+}
+
+impl Swap {
+    // Converts the Swap enum to a fixed-size byte array for PDA seed generation
+    pub fn to_bytes(&self) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        match self {
+            Swap::Saber => bytes[0] = 0,
+            Swap::SaberAddDecimalsDeposit => bytes[0] = 1,
+            Swap::SaberAddDecimalsWithdraw => bytes[0] = 2,
+            Swap::TokenSwap => bytes[0] = 3,
+            Swap::Sencha => bytes[0] = 4,
+            Swap::Step => bytes[0] = 5,
+            Swap::Cropper => bytes[0] = 6,
+            Swap::Raydium => bytes[0] = 7,
+            Swap::Crema { a_to_b } => {
+                bytes[0] = 8;
+                bytes[1] = *a_to_b as u8;
+            }
+            Swap::Lifinity => bytes[0] = 9,
+            Swap::Mercurial => bytes[0] = 10,
+            Swap::Cykura => bytes[0] = 11,
+            Swap::Serum { side } => {
+                bytes[0] = 12;
+                bytes[1] = match side {
+                    Side::Bid => 0,
+                    Side::Ask => 1,
+                };
+            }
+            Swap::MarinadeDeposit => bytes[0] = 13,
+            Swap::MarinadeUnstake => bytes[0] = 14,
+            Swap::Aldrin { side } => {
+                bytes[0] = 15;
+                bytes[1] = match side {
+                    Side::Bid => 0,
+                    Side::Ask => 1,
+                };
+            }
+            Swap::AldrinV2 { side } => {
+                bytes[0] = 16;
+                bytes[1] = match side {
+                    Side::Bid => 0,
+                    Side::Ask => 1,
+                };
+            }
+            Swap::Whirlpool { a_to_b } => {
+                bytes[0] = 17;
+                bytes[1] = *a_to_b as u8;
+            }
+            Swap::Invariant { x_to_y } => {
+                bytes[0] = 18;
+                bytes[1] = *x_to_y as u8;
+            }
+            Swap::Meteora => bytes[0] = 19,
+            Swap::GooseFX => bytes[0] = 20,
+            Swap::DeltaFi { stable } => {
+                bytes[0] = 21;
+                bytes[1] = *stable as u8;
+            }
+            Swap::Balansol => bytes[0] = 22,
+            Swap::MarcoPolo { x_to_y } => {
+                bytes[0] = 23;
+                bytes[1] = *x_to_y as u8;
+            }
+            Swap::Dradex { side } => {
+                bytes[0] = 24;
+                bytes[1] = match side {
+                    Side::Bid => 0,
+                    Side::Ask => 1,
+                };
+            }
+            Swap::LifinityV2 => bytes[0] = 25,
+            Swap::RaydiumClmm => bytes[0] = 26,
+            Swap::Openbook { side } => {
+                bytes[0] = 27;
+                bytes[1] = match side {
+                    Side::Bid => 0,
+                    Side::Ask => 1,
+                };
+            }
+            Swap::Phoenix { side } => {
+                bytes[0] = 28;
+                bytes[1] = match side {
+                    Side::Bid => 0,
+                    Side::Ask => 1,
+                };
+            }
+            Swap::Symmetry { from_token_id, to_token_id } => {
+                bytes[0] = 29;
+                bytes[1..9].copy_from_slice(&from_token_id.to_le_bytes());
+                bytes[9..17].copy_from_slice(&to_token_id.to_le_bytes());
+            }
+        }
+        bytes
+    }
 }
 
 // Defines the side of an order for DEXs like Serum
@@ -172,9 +274,8 @@ pub struct RoutePlanStep {
     pub output_index: u8,  // Index of output token account in remaining accounts
 }
 
-// Result struct for swap operations (redefined here, also in adapters/mod.rs)
+// Result struct for swap operations
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct SwapResult {
     pub output_amount: u64, // Output amount from the swap
 }
-
