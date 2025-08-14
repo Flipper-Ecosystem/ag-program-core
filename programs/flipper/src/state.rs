@@ -5,16 +5,8 @@ use crate::errors::ErrorCode;
 #[account]
 pub struct AdapterRegistry {
     pub authority: Pubkey,            // Account authorized to manage the registry
+    pub operators: Vec<Pubkey>,      // List of operator public keys authorized to manage adapters and pools
     pub supported_adapters: Vec<AdapterInfo>, // List of supported DEX adapters
-}
-
-// Stores information about a single adapter
-#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
-pub struct AdapterInfo {
-    pub name: String,                // Name of the adapter (e.g., "Raydium")
-    pub program_id: Pubkey,          // Program ID of the DEX protocol
-    pub swap_type: Swap,             // Type of swap (e.g., Raydium, Whirlpool)
-    pub pool_addresses: Vec<Pubkey>, // Valid pool addresses for the adapter
 }
 
 // Implementation of methods for AdapterRegistry
@@ -40,13 +32,71 @@ impl AdapterRegistry {
             .map(|adapter| adapter.program_id)
             .ok_or(error!(ErrorCode::SwapNotSupported))
     }
+
+    // Checks if a public key is an authorized operator
+    // # Arguments
+    // * `key` - The public key to check
+    // # Returns
+    // * `bool` - True if the key is an operator or the authority, false otherwise
+    pub fn is_authorized_operator(&self, key: &Pubkey) -> bool {
+        self.authority == *key || self.operators.contains(key)
+    }
 }
+
+// Stores information about a single adapter
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct AdapterInfo {
+    pub name: String,                // Name of the adapter (e.g., "Raydium")
+    pub program_id: Pubkey,          // Program ID of the DEX protocol
+    pub swap_type: Swap,             // Type of swap (e.g., Raydium, Whirlpool)
+    pub pool_addresses: Vec<Pubkey>, // Valid pool addresses for the adapter
+}
+
 
 // Event emitted when an adapter is configured in the registry
 #[event]
 pub struct AdapterConfigured {
     pub program_id: Pubkey, // Program ID of the configured adapter
     pub swap_type: Swap,    // Type of swap for the configured adapter
+}
+
+// Event emitted when an adapter is disabled in the registry
+#[event]
+pub struct AdapterDisabled {
+    pub swap_type: Swap, // Type of swap for the disabled adapter
+}
+
+// Event emitted when a pool is disabled in an adapter
+#[event]
+pub struct PoolDisabled {
+    pub swap_type: Swap,    // Type of swap for the adapter
+    pub pool_address: Pubkey, // Pool address that was disabled
+}
+
+// Event emitted when a new pool address is added to an adapter
+#[event]
+pub struct PoolAdded {
+    pub swap_type: Swap,    // Type of swap for the adapter
+    pub pool_address: Pubkey, // Pool address that was added
+}
+
+// Event emitted when the authority of the registry is changed
+#[event]
+pub struct AuthorityChanged {
+    pub old_authority: Pubkey, // Previous authority
+    pub new_authority: Pubkey, // New authority
+}
+
+// Event emitted when an operator is added to the registry
+#[event]
+pub struct OperatorAdded {
+    pub operator: Pubkey, // Public key of the added operator
+}
+
+// Event emitted when an operator is removed from the registry
+#[event]
+pub struct OperatorRemoved {
+    pub operator: Pubkey, // Public key of the removed operator
 }
 
 // Event emitted when a platform fee is applied
@@ -65,6 +115,10 @@ pub struct SwapEvent {
     pub input_amount: u64,   // Amount of input tokens
     pub output_mint: Pubkey, // Mint of the output token
     pub output_amount: u64,  // Amount of output tokens
+}
+#[event]
+pub struct RegistryReset {
+    pub authority: Pubkey,
 }
 
 // Defines supported swap types for various DEX protocols
@@ -123,3 +177,4 @@ pub struct RoutePlanStep {
 pub struct SwapResult {
     pub output_amount: u64, // Output amount from the swap
 }
+

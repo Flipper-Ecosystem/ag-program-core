@@ -40,4 +40,14 @@ pub enum ErrorCode {
     // CPI program ID does not match expected adapter program ID
     #[msg("Invalid CPI interface")]
     InvalidCpiInterface = 6021,
+    #[msg("Pool already exists")]
+    PoolAlreadyExists = 6022,
+    #[msg("Pool not found")]
+    PoolNotFound = 6023,
+    #[msg("Invalid operatpr")]
+    InvalidOperator = 6024,
+    #[msg("Operator already exists")]
+    OperatorAlreadyExists = 6026,
+    #[msg("Operator not found")]
+    OperatorNotFound,
 }
