@@ -114,6 +114,7 @@ pub fn route<'info>(
             input_account: input_vault_account.clone(),
             output_account: output_account_info.clone(),
             remaining_accounts: ctx.remaining_accounts,
+            program_id: ctx.program_id.clone(),
         };
 
         adapter.validate_accounts(adapter_ctx.clone(), step.input_index as usize + 1)?;

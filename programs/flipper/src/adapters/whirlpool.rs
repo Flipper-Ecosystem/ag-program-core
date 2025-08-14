@@ -1,194 +1,280 @@
-use anchor_lang::prelude::*; // Core Anchor types and macros
-use crate::adapters::{AdapterContext, dex_adapter::DexAdapter}; // Adapter context and trait
-use crate::errors::ErrorCode; // Custom error codes for the program
-use crate::state::SwapResult; // Struct to return swap output amount
-use anchor_lang::solana_program::program::invoke_signed; // Solana CPI invocation
-use anchor_lang::solana_program::instruction::Instruction; // Solana instruction struct
-use anchor_spl::token::{TokenAccount, Token}; // SPL token types for account deserialization
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::Instruction;
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_spl::token::{Token, TokenAccount};
+use crate::adapters::{AdapterContext, DexAdapter};
+use crate::errors::ErrorCode;
+use crate::state::{Swap, SwapEvent, SwapResult, PoolInfo};
 
-// Struct representing the Whirlpool swap instruction data, matching the Whirlpool program's IDL
-#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
-pub struct WhirlpoolSwapInstruction {
-    pub amount: u64, // Input amount for the swap (exact input)
-    pub other_amount_threshold: u64, // Minimum output amount to prevent excessive slippage
-    pub sqrt_price_limit: u128, // Maximum/minimum price limit for the swap (0 for no limit)
-    pub amount_specified_is_input: bool, // True if amount is input, false if output
-    pub a_to_b: bool, // Swap direction (true: token A to B, false: token B to A)
-}
-
-// Adapter for interacting with the Whirlpool DEX protocol
+/// Adapter for interacting with the Whirlpool protocol
 pub struct WhirlpoolAdapter {
-    pub program_id: Pubkey, // Whirlpool program ID (whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc)
-    pub a_to_b: bool, // Swap direction (true for A-to-B, false for B-to-A)
+    pub program_id: Pubkey, // Whirlpool program ID for CPI calls
+    pub a_to_b: bool
 }
 
-// Implementation of the DexAdapter trait for Whirlpool
+// Program IDs from anchor-spl
+const TOKEN_PROGRAM_ID: Pubkey = anchor_spl::token::ID;
+const TOKEN_2022_PROGRAM_ID: Pubkey = anchor_spl::token_2022::ID;
+
+/// Whirlpool swapV2 instruction discriminator
+/// This is the first 8 bytes of the sha256 hash of "global:swapV2"
+/// From IDL: swapV2 is at index 48, so we calculate the discriminator
+const SWAP_V2_DISCRIMINATOR: [u8; 8] = [43, 4, 237, 11, 26, 201, 30, 98];
+
+/// Arguments for Whirlpool swapV2 instruction
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub struct SwapV2Args {
+    pub amount: u64,                              // Amount of input tokens to swap
+    pub other_amount_threshold: u64,              // Minimum amount of output tokens expected
+    pub sqrt_price_limit: u128,                   // Price limit for the swap (0 for no limit)
+    pub amount_specified_is_input: bool,          // True if amount is input, false if output
+    pub a_to_b: bool,                            // Swap direction (true: A to B, false: B to A)
+    pub remaining_accounts_info: Option<RemainingAccountsInfo>, // Info about remaining accounts
+}
+
+/// Information about remaining accounts structure
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub struct RemainingAccountsInfo {
+    pub slices: Vec<RemainingAccountsSlice>,      // Array of account slices
+}
+
+/// Describes a slice of remaining accounts
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub struct RemainingAccountsSlice {
+    pub accounts_type: AccountsType,              // Type of accounts in this slice
+    pub length: u8,                               // Number of accounts in this slice
+}
+
+/// Types of accounts that can be in remaining accounts
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub enum AccountsType {
+    TransferHookA,
+    TransferHookB,
+    TransferHookReward,
+    TransferHookInput,
+    TransferHookIntermediate,
+    TransferHookOutput,
+    SupplementalTickArrays,                      // Additional tick arrays for large swaps
+    SupplementalTickArraysOne,
+    SupplementalTickArraysTwo,
+}
+
 impl DexAdapter for WhirlpoolAdapter {
-    // Executes a swap on the Whirlpool protocol using a CPI to the Whirlpool program
+    /// Execute a swap through Whirlpool protocol
     fn execute_swap(
         &self,
-        ctx: AdapterContext, // Context containing accounts and program data
-        amount: u64, // Input amount for the swap
-        remaining_accounts_start_index: usize, // Starting index for DEX-specific accounts in remaining_accounts
+        ctx: AdapterContext,
+        amount: u64,
+        remaining_accounts_start_index: usize,
     ) -> Result<SwapResult> {
-        // Log swap execution details for debugging
-        msg!("Executing Whirlpool swap, a_to_b: {}, amount: {}", self.a_to_b, amount);
+        msg!("Executing Whirlpool swapV2, amount: {}", amount);
 
-        // Check if enough accounts are provided for the Whirlpool swap (requires 9 accounts: pool, token program, token accounts, vaults, 3 tick arrays, oracle)
-        if ctx.remaining_accounts.len() < remaining_accounts_start_index + 7 {
+        // Ensure we have at least 16 required accounts for swapV2
+        if ctx.remaining_accounts.len() < remaining_accounts_start_index + 16 {
             return Err(ErrorCode::NotEnoughAccountKeys.into());
         }
 
-        // Extract accounts from remaining_accounts, as provided by the Jupiter router
-        let pool_account = &ctx.remaining_accounts[remaining_accounts_start_index]; // Whirlpool pool account
-        let token_program = &ctx.token_program; // SPL token program
-        let token_owner_account_a = &ctx.remaining_accounts[remaining_accounts_start_index + 1]; // Input token account
-        let token_owner_account_b = &ctx.remaining_accounts[remaining_accounts_start_index + 2]; // Output token account
-        let token_vault_a = &ctx.remaining_accounts[remaining_accounts_start_index + 3]; // Pool's token vault A
-        let token_vault_b = &ctx.remaining_accounts[remaining_accounts_start_index + 4]; // Pool's token vault B
-        let tick_array_0 = &ctx.remaining_accounts[remaining_accounts_start_index + 5]; // First tick array (contains current tick)
-        let tick_array_1 = &ctx.remaining_accounts[remaining_accounts_start_index + 6]; // Second tick array (for price range crossing)
-        let tick_array_2 = &ctx.remaining_accounts[remaining_accounts_start_index + 7]; // Third tick array (for price range crossing)
-        let oracle = &ctx.remaining_accounts[remaining_accounts_start_index + 8]; // Oracle account for price data
+        // Get slice of remaining accounts starting from our index for efficient access
+        let remaining_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..];
 
-        // Deserialize the output token account to get its initial balance before the swap
-        let output_account: Account<TokenAccount> = Account::try_from(token_owner_account_b)?;
-        let initial_balance = output_account.amount;
-        // Log initial balance for debugging
-        msg!("Initial output balance: {}", initial_balance);
+        // Validate pool is enabled
+        let pool_info = Account::<PoolInfo>::try_from(&remaining_accounts[0])?;
+        if !pool_info.enabled {
+            return Err(ErrorCode::PoolDisabled.into());
+        }
 
-        // Construct the Whirlpool swap instruction data
-        // Note: other_amount_threshold is set to 0, disabling slippage protection (to be improved with swap_quote_a)
-        let swap_instruction = WhirlpoolSwapInstruction {
-            amount, // Input amount
-            other_amount_threshold: 0, // Set to 0 for exact input swap (no minimum output enforced)
-            sqrt_price_limit: 0, // No price limit for simplicity (allows swap at any price)
-            amount_specified_is_input: true, // Specifies amount is input (exact input swap)
-            a_to_b: self.a_to_b, // Swap direction
+        // Calculate number of supplemental tick arrays available (max 20 allowed by Whirlpool)
+        let supplemental_tick_arrays_count = ((remaining_accounts.len() - 16).min(20)) as u8;
+
+        // Record initial output token balance for calculating swap result
+        let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
+        let initial_output_amount = output_vault_data.amount;
+
+        // Determine swap direction based on token accounts
+        let whirlpool_data = &remaining_accounts[1].data.borrow();
+        let token_mint_a = Pubkey::try_from(&whirlpool_data[73..105]).map_err(|_| ErrorCode::InvalidAccount)?;
+        let token_mint_b = Pubkey::try_from(&whirlpool_data[137..169]).map_err(|_| ErrorCode::InvalidAccount)?;
+
+        let input_mint_data = TokenAccount::try_deserialize(&mut ctx.input_account.data.borrow().as_ref())?;
+        let a_to_b = input_mint_data.mint == token_mint_a;
+
+        if (self.a_to_b != a_to_b) {
+            return Err(ErrorCode::InvalidMint.into());
+        }
+
+        // Create swapV2 instruction arguments
+        let swap_args = SwapV2Args {
+            amount,
+            other_amount_threshold: 0, // No slippage protection in this example
+            sqrt_price_limit: 0,       // No price limit
+            amount_specified_is_input: true, // Always exact input
+            a_to_b,
+            remaining_accounts_info: if supplemental_tick_arrays_count > 0 {
+                Some(RemainingAccountsInfo {
+                    slices: vec![RemainingAccountsSlice {
+                        accounts_type: AccountsType::SupplementalTickArrays,
+                        length: supplemental_tick_arrays_count,
+                    }],
+                })
+            } else {
+                None
+            },
         };
 
-        // Prepare accounts for the CPI to the Whirlpool program
-        // AccountMeta specifies each account's properties (is_writable, is_signer)
-        let accounts = vec![
-            AccountMeta::new_readonly(ctx.authority.key(), true), // Authority (signer)
-            AccountMeta::new_readonly(token_program.key(), false), // Token program
-            AccountMeta::new(pool_account.key(), false), // Pool account (mutable for state updates)
-            AccountMeta::new(token_owner_account_a.key(), false), // Input token account (mutable)
-            AccountMeta::new(token_owner_account_b.key(), false), // Output token account (mutable)
-            AccountMeta::new(token_vault_a.key(), false), // Token vault A (mutable)
-            AccountMeta::new(token_vault_b.key(), false), // Token vault B (mutable)
-            AccountMeta::new(tick_array_0.key(), false), // Tick array 0 (mutable for tick updates)
-            AccountMeta::new(tick_array_1.key(), false), // Tick array 1 (mutable for tick updates)
-            AccountMeta::new(tick_array_2.key(), false), // Tick array 2 (mutable for tick updates)
-            AccountMeta::new_readonly(oracle.key(), false), // Oracle (read-only for price data)
+        // Prepare instruction data with discriminator and serialized arguments
+        let mut instruction_data = Vec::new();
+        instruction_data.extend_from_slice(&SWAP_V2_DISCRIMINATOR);
+        instruction_data.extend_from_slice(&swap_args.try_to_vec()?);
+
+        // Build account metas for the swapV2 instruction
+        // Order must match Whirlpool swapV2 interface exactly
+        let mut accounts = vec![
+            AccountMeta::new_readonly(remaining_accounts[2].key(), false),  // tokenProgramA
+            AccountMeta::new_readonly(remaining_accounts[3].key(), false),  // tokenProgramB
+            AccountMeta::new_readonly(remaining_accounts[4].key(), false),  // memoProgram
+            AccountMeta::new_readonly(ctx.authority.key(), true),           // tokenAuthority (signer)
+            AccountMeta::new(remaining_accounts[1].key(), false),           // whirlpool
+            AccountMeta::new_readonly(remaining_accounts[5].key(), false),  // tokenMintA
+            AccountMeta::new_readonly(remaining_accounts[6].key(), false),  // tokenMintB
+            AccountMeta::new(ctx.input_account.key(), false),               // tokenOwnerAccountA/B (input)
+            AccountMeta::new(remaining_accounts[7].key(), false),           // tokenVaultA
+            AccountMeta::new(ctx.output_account.key(), false),              // tokenOwnerAccountB/A (output)
+            AccountMeta::new(remaining_accounts[8].key(), false),           // tokenVaultB
+            AccountMeta::new(remaining_accounts[9].key(), false),           // tickArray0
+            AccountMeta::new(remaining_accounts[10].key(), false),          // tickArray1
+            AccountMeta::new(remaining_accounts[11].key(), false),          // tickArray2
+            AccountMeta::new(remaining_accounts[12].key(), false),          // oracle
         ];
 
+        // Add supplemental tick arrays to account metas (dynamic part)
+        for i in 0..supplemental_tick_arrays_count {
+            accounts.push(AccountMeta::new(remaining_accounts[16 + i as usize].key(), false));
+        }
 
-        let instruction_data = swap_instruction.try_to_vec()?;
-        // TODO: Whilpool  swap instruction discriminator from IDL, change it to right
-        let discriminator =  [246, 198, 69, 84, 45, 183, 178, 109];
-        let mut full_instruction_data = Vec::new();
-        full_instruction_data.extend_from_slice(&discriminator);
-        full_instruction_data.extend_from_slice(&instruction_data);
+        // Build AccountInfo vector
+        let mut account_infos = vec![
+            remaining_accounts[2].clone(),   // tokenProgramA
+            remaining_accounts[3].clone(),   // tokenProgramB
+            remaining_accounts[4].clone(),   // memoProgram
+            ctx.authority.clone(),           // tokenAuthority
+            remaining_accounts[1].clone(),   // whirlpool
+            remaining_accounts[5].clone(),   // tokenMintA
+            remaining_accounts[6].clone(),   // tokenMintB
+            ctx.input_account.clone(),       // tokenOwnerAccount (input)
+            remaining_accounts[7].clone(),   // tokenVaultA
+            ctx.output_account.clone(),      // tokenOwnerAccount (output)
+            remaining_accounts[8].clone(),   // tokenVaultB
+            remaining_accounts[9].clone(),   // tickArray0
+            remaining_accounts[10].clone(),  // tickArray1
+            remaining_accounts[11].clone(),  // tickArray2
+            remaining_accounts[12].clone(),  // oracle
+        ];
+
+        // Add dynamic supplemental tick arrays
+        for i in 0..supplemental_tick_arrays_count {
+            account_infos.push(remaining_accounts[16 + i as usize].clone());
+        }
 
         // Create the instruction
         let instruction = Instruction {
             program_id: self.program_id,
             accounts,
-            data: full_instruction_data,
+            data: instruction_data,
         };
 
-        // Execute the CPI to the Whirlpool program
-        invoke_signed(
-            &instruction,
-            &[
-                ctx.authority.clone(),
-                token_program.clone(),
-                pool_account.clone(),
-                token_owner_account_a.clone(),
-                token_owner_account_b.clone(),
-                token_vault_a.clone(),
-                token_vault_b.clone(),
-                tick_array_0.clone(),
-                tick_array_1.clone(),
-                tick_array_2.clone(),
-                oracle.clone(),
-            ],
-            &[], // No additional signers needed
-        )?;
+        // Find PDA for vault authority with proper seed derivation
+        let (vault_authority_pda, vault_authority_bump) = Pubkey::find_program_address(
+            &[b"vault_authority"],
+            &ctx.program_id,
+        );
 
-        // Reload the output token account to get its balance after the swap
-        let output_account: Account<TokenAccount> = Account::try_from(token_owner_account_b)?;
-        let final_balance = output_account.amount;
-        // Log final balance for debugging
-        msg!("Final output balance: {}", final_balance);
+        // Verify that ctx.authority matches our calculated PDA
+        if ctx.authority.key() != vault_authority_pda {
+            return Err(ErrorCode::InvalidAccount.into());
+        }
 
-        // Calculate the output amount as the difference between final and initial balances
-        // Returns InvalidCalculation if final_balance < initial_balance, indicating a swap failure
-        let output_amount = final_balance
-            .checked_sub(initial_balance)
-            .ok_or_else(|| {
-                msg!("Invalid swap output: final_balance ({}) < initial_balance ({})", final_balance, initial_balance);
-                ErrorCode::InvalidCalculation
-            })?;
+        // Execute CPI call with proper signer seeds
+        let authority_seeds: &[&[u8]] = &[b"vault_authority", &[vault_authority_bump]];
+        let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
 
-        // Log the output amount for debugging
-        msg!("Swap output amount: {}", output_amount);
+        invoke_signed(&instruction, &account_infos, signer_seeds)?;
 
-        // Return the swap result with the calculated output amount
+        // Calculate output amount by checking balance difference
+        let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
+        let output_amount = output_vault_data.amount
+            .checked_sub(initial_output_amount)
+            .ok_or(ErrorCode::InvalidCalculation)?;
+
+        msg!("Whirlpool swapV2 completed, output amount: {}", output_amount);
+
         Ok(SwapResult { output_amount })
     }
 
-    // Validates accounts for a Whirlpool swap to ensure they are correct before executing the CPI
+    /// Validate that all required accounts are provided and valid
     fn validate_accounts(
         &self,
-        ctx: AdapterContext, // Context containing accounts
-        remaining_accounts_start_index: usize, // Starting index for DEX-specific accounts
+        ctx: AdapterContext,
+        remaining_accounts_start_index: usize,
     ) -> Result<()> {
-        // Check if enough accounts are provided (requires 9 accounts)
-        if ctx.remaining_accounts.len() < remaining_accounts_start_index + 7 {
+        // Ensure minimum required accounts are present
+        if ctx.remaining_accounts.len() < remaining_accounts_start_index + 16 {
             return Err(ErrorCode::NotEnoughAccountKeys.into());
         }
 
-        // Validate that the pool account is a supported Whirlpool pool
-        let pool_account = &ctx.remaining_accounts[remaining_accounts_start_index];
- 
+        // Get efficient slice access
+        let remaining_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..];
 
-        // Optional: Validate pool account ownership (uncomment if needed)
-        // Ensures the pool account is owned by the Whirlpool program
-        // if pool_account.owner != &self.program_id {
-        //     return Err(ErrorCode::InvalidPoolAddress.into());
-        // }
+        // Validate pool is enabled and matches expected address
+        let pool_info = Account::<PoolInfo>::try_from(&remaining_accounts[0])?;
+        if !pool_info.enabled {
+            return Err(ErrorCode::PoolDisabled.into());
+        }
 
-        // Extract Whirlpool-specific accounts from remaining_accounts
-        let token_owner_account_a = &ctx.remaining_accounts[remaining_accounts_start_index + 1]; // Input token account
-        let token_owner_account_b = &ctx.remaining_accounts[remaining_accounts_start_index + 2]; // Output token account
-        let token_vault_a = &ctx.remaining_accounts[remaining_accounts_start_index + 3]; // Token vault A
-        let token_vault_b = &ctx.remaining_accounts[remaining_accounts_start_index + 4]; // Token vault B
-        let tick_array_0 = &ctx.remaining_accounts[remaining_accounts_start_index + 5]; // Tick array 0
-        let tick_array_1 = &ctx.remaining_accounts[remaining_accounts_start_index + 6]; // Tick array 1
-        let tick_array_2 = &ctx.remaining_accounts[remaining_accounts_start_index + 7]; // Tick array 2
-        let oracle = &ctx.remaining_accounts[remaining_accounts_start_index + 8]; // Oracle account
+        let whirlpool = &remaining_accounts[1];
+        if pool_info.pool_address != whirlpool.key() {
+            return Err(ErrorCode::InvalidPoolAddress.into());
+        }
 
-        // Validate that no accounts have a zero Pubkey, ensuring they are properly initialized
-        // This prevents invalid accounts from being used in the swap
-        if token_owner_account_a.key() == Pubkey::default()
-            || token_owner_account_b.key() == Pubkey::default()
-            || token_vault_a.key() == Pubkey::default()
-            || token_vault_b.key() == Pubkey::default()
-            || tick_array_0.key() == Pubkey::default()
-            || tick_array_1.key() == Pubkey::default()
-            || tick_array_2.key() == Pubkey::default()
-            || oracle.key() == Pubkey::default()
+        // Validate token programs are correct (SPL Token or Token2022)
+        let token_program_a = &remaining_accounts[2];
+        let token_program_b = &remaining_accounts[3];
+
+        let valid_token_programs = [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID];
+        if !valid_token_programs.contains(&token_program_a.key())
+            || !valid_token_programs.contains(&token_program_b.key())
+        {
+            return Err(ErrorCode::InvalidCpiInterface.into());
+        }
+
+        // Validate whirlpool program ownership
+        if whirlpool.owner != &self.program_id {
+            return Err(ErrorCode::InvalidCpiInterface.into());
+        }
+
+        // Ensure critical accounts are not default (empty) pubkeys
+        if whirlpool.key() == Pubkey::default()
+            || remaining_accounts[7].key() == Pubkey::default() // tokenVaultA
+            || remaining_accounts[8].key() == Pubkey::default() // tokenVaultB
         {
             return Err(ErrorCode::InvalidAccount.into());
         }
 
-        // Return Ok if all validations pass
+        // Validate tick arrays are not default
+        for i in 9..=11 {
+            if remaining_accounts[i].key() == Pubkey::default() {
+                return Err(ErrorCode::InvalidAccount.into());
+            }
+        }
+
+        // Validate oracle account
+        if remaining_accounts[12].key() == Pubkey::default() {
+            return Err(ErrorCode::InvalidAccount.into());
+        }
+
         Ok(())
     }
 
-    // Validates that the CPI program ID matches the expected Whirlpool program ID
+    /// Validate CPI call is targeting correct program
     fn validate_cpi(&self, program_id: &Pubkey) -> Result<()> {
         if *program_id != self.program_id {
             return Err(ErrorCode::InvalidCpiInterface.into());
