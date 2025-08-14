@@ -24,6 +24,7 @@ pub struct AdapterContext<'info> {
     pub input_account: AccountInfo<'info>, // Input token account
     pub output_account: AccountInfo<'info>, // Output token account
     pub remaining_accounts: &'info [AccountInfo<'info>], // Additional accounts for adapter-specific logic
+    pub program_id: Pubkey //for PDA calculation
 }
 
 // Retrieves the appropriate adapter implementation based on the swap type

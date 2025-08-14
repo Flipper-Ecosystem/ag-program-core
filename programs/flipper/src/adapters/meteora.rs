@@ -154,8 +154,11 @@ impl DexAdapter for MeteoraAdapter {
         };
 
         // Execute CPI call with proper signer seeds
-        // Note: vault_authority_bump should be calculated properly in production
-        let vault_authority_bump = ctx.authority.key().as_ref()[31]; // Simplified bump calculation
+        let (vault_authority_pda, vault_authority_bump) = Pubkey::find_program_address(
+            &[b"vault_authority"],
+            &ctx.program_id,
+        );
+
         let authority_seeds: &[&[u8]] = &[b"vault_authority", &[vault_authority_bump]];
         let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
 
