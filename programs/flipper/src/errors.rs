@@ -63,5 +63,7 @@ pub enum ErrorCode {
     #[msg("Invalid account")]
     InvalidAccount = 6048,
     #[msg("Pool disabled")]
-    PoolDisabled = 6049
+    PoolDisabled = 6049,
+    #[msg("Invalid token program for mint")]
+    InvalidTokenProgram = 6050
 }
