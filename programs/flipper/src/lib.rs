@@ -12,7 +12,7 @@ declare_id!("5958qddzZjU34CHUD4bisVBiYgDQ6EREwBLgpbVaSLX7");
 pub mod flipper {
     use super::*;
     pub use instructions::{
-        adapter_module::*,
+        adapter_registry_module::*,
         swap_processor_module::*,
         vault_manager_module::*
     };
