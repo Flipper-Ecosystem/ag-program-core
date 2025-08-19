@@ -2,7 +2,8 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_spl::token::{Token, TokenAccount};
-use crate::adapters::{AdapterContext, DexAdapter};
+use crate::adapters::adapter_connector_module::{AdapterContext};
+use crate::adapters::dex_adapter::DexAdapter;
 use crate::errors::ErrorCode;
 use crate::state::{Swap, SwapEvent, SwapResult, PoolInfo};
 

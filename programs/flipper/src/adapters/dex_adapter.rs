@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use crate::adapters::AdapterContext;
+use crate::adapters::adapter_connector_module::AdapterContext;
 use crate::state::SwapResult;
 
 // Trait defining the interface for decentralized exchange (DEX) adapters

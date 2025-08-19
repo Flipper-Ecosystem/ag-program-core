@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount, Transfer, transfer, InitializeAccount, initialize_account};
 use anchor_spl::token_2022::{Token2022};
 use anchor_lang::solana_program::{program::invoke_signed, system_instruction};
-use crate::adapters::{AdapterContext, get_adapter};
+use crate::adapters::adapter_connector_module::{AdapterContext, get_adapter};
 use crate::errors::ErrorCode;
 use crate::state::*;
 
