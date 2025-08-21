@@ -5,10 +5,55 @@ use anchor_lang::solana_program::{program::invoke_signed, system_instruction};
 use crate::adapters::adapter_connector_module::{AdapterContext, get_adapter};
 use crate::errors::ErrorCode;
 use crate::state::*;
+use crate::instructions::route_validator_module;
 
 // Program IDs for validation
 const TOKEN_PROGRAM_ID: Pubkey = anchor_spl::token::ID;
 const TOKEN_2022_PROGRAM_ID: Pubkey = anchor_spl::token_2022::ID;
+
+#[event_cpi]
+#[derive(Accounts)]
+#[instruction(route_plan: Vec<RoutePlanStep>)]
+pub struct Route<'info> {
+    #[account(
+        seeds = [b"adapter_registry"],
+        bump
+    )]
+    pub adapter_registry: Account<'info, AdapterRegistry>,
+    #[account(
+        seeds = [b"vault_authority"],
+        bump
+    )]
+    /// CHECK: vault authority
+    pub vault_authority: AccountInfo<'info>,
+
+    // Separate token programs for input and output
+    /// CHECK: Input token program (SPL Token or Token2022)
+    pub input_token_program: AccountInfo<'info>,
+    /// CHECK: Output token program (SPL Token or Token2022)
+    pub output_token_program: AccountInfo<'info>,
+
+    #[account(signer)]
+    pub user_transfer_authority: Signer<'info>,
+    #[account(
+        mut,
+        token::mint = source_mint,
+        token::token_program = input_token_program
+    )]
+    pub user_source_token_account: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        token::mint = destination_mint,
+        token::token_program = output_token_program
+    )]
+    pub user_destination_token_account: Account<'info, TokenAccount>,
+    /// CHECK: Mint account for the input token
+    pub source_mint: AccountInfo<'info>,
+    /// CHECK: Mint account for the output token
+    pub destination_mint: AccountInfo<'info>,
+    #[account(mut)]
+    pub platform_fee_account: Option<Account<'info, TokenAccount>>,
+}
 
 pub fn route<'info>(
     ctx: Context<'_, '_, 'info, 'info, Route<'info>>,
@@ -18,31 +63,21 @@ pub fn route<'info>(
     slippage_bps: u16,
     platform_fee_bps: u8,
 ) -> Result<u64> {
-    if route_plan.is_empty() {
-        return Err(ErrorCode::EmptyRoute.into());
-    }
-
-    let total_percent: u8 = route_plan.iter().map(|step| step.percent).sum();
-    if total_percent != 100 {
-        return Err(ErrorCode::NotEnoughPercent.into());
-    }
-
     if slippage_bps > 10_000 {
         return Err(ErrorCode::InvalidSlippage.into());
     }
 
-    // Validate token programs
-    validate_token_program(&ctx.accounts.input_token_program)?;
-    validate_token_program(&ctx.accounts.output_token_program)?;
-
-    // Validate mint compatibility with token programs
-    validate_mint_program_compatibility(&ctx.accounts.source_mint, &ctx.accounts.input_token_program)?;
-    validate_mint_program_compatibility(&ctx.accounts.destination_mint, &ctx.accounts.output_token_program)?;
-
-    let required_accounts = route_plan.len() * 3;
-    if ctx.remaining_accounts.len() < required_accounts {
-        return Err(ErrorCode::NotEnoughAccountKeys.into());
-    }
+    // Validate route and accounts
+    route_validator_module::validate_route(
+        &ctx.accounts.adapter_registry,
+        &ctx.accounts.input_token_program,
+        &ctx.accounts.output_token_program,
+        &ctx.accounts.source_mint,
+        &ctx.accounts.destination_mint,
+        &route_plan,
+        ctx.remaining_accounts,
+        ctx.program_id,
+    )?;
 
     let adapter_registry = &ctx.accounts.adapter_registry;
     let mut current_amount = in_amount;
@@ -50,7 +85,7 @@ pub fn route<'info>(
 
     let vault_authority_bump = ctx.bumps.vault_authority;
     let authority_seeds: &[&[u8]] = &[
-        b"vault_authority",
+        b"vault_authority".as_ref(),
         &[vault_authority_bump],
     ];
     let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
@@ -80,10 +115,6 @@ pub fn route<'info>(
 
     // Execute each step in the route plan
     for (i, step) in route_plan.iter().enumerate() {
-        if !adapter_registry.is_supported_adapter(&step.swap) {
-            return Err(ErrorCode::SwapNotSupported.into());
-        }
-
         let step_amount = (current_amount as u128 * step.percent as u128 / 100) as u64;
         if step_amount == 0 {
             return Err(ErrorCode::InvalidCalculation.into());
@@ -97,13 +128,7 @@ pub fn route<'info>(
             ctx.remaining_accounts[step.output_index as usize].clone()
         };
 
-        // Validate input vault
-        let input_vault_data = TokenAccount::try_deserialize(&mut input_vault_account.data.borrow().as_ref())?;
-        if i == 0 && input_vault_data.mint != ctx.accounts.source_mint.key() {
-            return Err(ErrorCode::InvalidMint.into());
-        }
-
-        // Get adapter and validate it exists
+        // Get adapter
         let adapter = get_adapter(&step.swap, adapter_registry)?;
         let adapter_info = adapter_registry
             .supported_adapters
@@ -111,31 +136,15 @@ pub fn route<'info>(
             .find(|a| a.swap_type == step.swap)
             .ok_or(ErrorCode::SwapNotSupported)?;
 
-        // Validate pool info
-        let pool_info_account = &ctx.remaining_accounts[step.input_index as usize + 1];
-        let pool_info = Account::<PoolInfo>::try_from(pool_info_account)?;
-        if pool_info.adapter_swap_type != step.swap || !pool_info.enabled {
-            return Err(ErrorCode::InvalidPoolAddress.into());
-        }
-
-        // Validate pool address matches
-        let pool_account = &ctx.remaining_accounts[step.input_index as usize + 2];
-        if pool_account.key() != pool_info.pool_address {
-            return Err(ErrorCode::InvalidPoolAddress.into());
-        }
-
-        // Create adapter context (адаптеры сами получат token programs из remaining_accounts)
+        // Create adapter context
         let adapter_ctx = AdapterContext {
-            token_program: input_token_program_info.clone(), // Оставляем для обратной совместимости
+            token_program: input_token_program_info.clone(),
             authority: ctx.accounts.vault_authority.to_account_info(),
             input_account: input_vault_account.clone(),
             output_account: output_account_info.clone(),
             remaining_accounts: ctx.remaining_accounts,
             program_id: ctx.program_id.clone(),
         };
-
-        // Validate accounts for this adapter
-        adapter.validate_accounts(adapter_ctx.clone(), step.input_index as usize + 1)?;
 
         // Execute the swap
         let swap_result = adapter.execute_swap(adapter_ctx, step_amount, step.input_index as usize + 1)?;
@@ -154,7 +163,7 @@ pub fn route<'info>(
         // Emit swap event
         emit_cpi!(SwapEvent {
             amm: adapter_info.program_id,
-            input_mint: input_vault_data.mint,
+            input_mint: ctx.accounts.source_mint.key(),
             input_amount: step_amount,
             output_mint,
             output_amount: current_amount,
@@ -209,66 +218,4 @@ pub fn route<'info>(
     }
 
     Ok(output_amount)
-}
-
-/// Validates that the provided account is a valid token program
-fn validate_token_program(program_account: &AccountInfo) -> Result<()> {
-    let valid_token_programs = [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID];
-    if !valid_token_programs.contains(&program_account.key()) {
-        return Err(ErrorCode::InvalidCpiInterface.into());
-    }
-    Ok(())
-}
-
-/// Validates that a mint is compatible with the specified token program
-fn validate_mint_program_compatibility(mint_account: &AccountInfo, token_program: &AccountInfo) -> Result<()> {
-    // Verify mint account owner matches token program
-    if mint_account.owner != &token_program.key() {
-        return Err(ErrorCode::InvalidMint.into());
-    }
-    Ok(())
-}
-
-#[event_cpi]
-#[derive(Accounts)]
-#[instruction(route_plan: Vec<RoutePlanStep>)]
-pub struct Route<'info> {
-    #[account(
-        seeds = [b"adapter_registry"],
-        bump
-    )]
-    pub adapter_registry: Account<'info, AdapterRegistry>,
-    #[account(
-        seeds = [b"vault_authority"],
-        bump
-    )]
-    /// CHECK: vault authority
-    pub vault_authority: AccountInfo<'info>,
-
-    // Separate token programs for input and output
-    /// CHECK: Input token program (SPL Token or Token2022)
-    pub input_token_program: AccountInfo<'info>,
-    /// CHECK: Output token program (SPL Token or Token2022)  
-    pub output_token_program: AccountInfo<'info>,
-
-    #[account(signer)]
-    pub user_transfer_authority: Signer<'info>,
-    #[account(
-        mut,
-        token::mint = source_mint,
-        token::token_program = input_token_program
-    )]
-    pub user_source_token_account: Account<'info, TokenAccount>,
-    #[account(
-        mut,
-        token::mint = destination_mint,
-        token::token_program = output_token_program
-    )]
-    pub user_destination_token_account: Account<'info, TokenAccount>,
-    /// CHECK: Mint account for the input token
-    pub source_mint: AccountInfo<'info>,
-    /// CHECK: Mint account for the output token  
-    pub destination_mint: AccountInfo<'info>,
-    #[account(mut)]
-    pub platform_fee_account: Option<Account<'info, TokenAccount>>,
 }
