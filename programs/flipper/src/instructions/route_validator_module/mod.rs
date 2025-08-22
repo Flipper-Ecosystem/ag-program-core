@@ -30,20 +30,17 @@ pub fn validate_route<'info>(
     adapter_registry: &Account<'info, AdapterRegistry>,
     input_token_program: &AccountInfo<'info>,
     output_token_program: &AccountInfo<'info>,
+    vault_authority: &AccountInfo<'info>,
     source_mint: &AccountInfo<'info>,
     destination_mint: &AccountInfo<'info>,
     route_plan: &[RoutePlanStep],
     remaining_accounts: &'info [AccountInfo<'info>],
     program_id: &Pubkey,
+    in_amount: u64,
 ) -> Result<()> {
-    // Validate route plan
+    // Validate route plan emptiness
     if route_plan.is_empty() {
         return Err(ErrorCode::EmptyRoute.into());
-    }
-
-    let total_percent: u8 = route_plan.iter().map(|step| step.percent).sum();
-    if total_percent != 100 {
-        return Err(ErrorCode::NotEnoughPercent.into());
     }
 
     // Validate token programs
@@ -72,13 +69,106 @@ pub fn validate_route<'info>(
         })
         .ok_or(ErrorCode::VaultNotFound)?;
 
-    // Validate each step in the route plan
-    for (i, step) in route_plan.iter().enumerate() {
+    // Detect partial swaps and multi-hop swaps
+    let mut input_vault_key = None;
+    let mut is_partial_swap = false;
+    let mut is_multi_hop = false;
+    let mut used_dexes = Vec::new();
+    let mut output_mints = Vec::new();
+    let mut current_amount = in_amount;
+
+    for i in 0..route_plan.len() {
+        let step = &route_plan[i];
+        // Validate percent is non-zero and within bounds
+        if step.percent == 0 || step.percent > 100 {
+            return Err(ErrorCode::InvalidPercent.into());
+        }
+
+        // Validate account indices
+        if step.input_index as usize >= remaining_accounts.len() || step.output_index as usize >= remaining_accounts.len() {
+            return Err(ErrorCode::InvalidAccountIndex.into());
+        }
+
+        let input_vault_account = &remaining_accounts[step.input_index as usize];
+        let output_account_info = if i == route_plan.len() - 1 {
+            destination_mint.clone()
+        } else {
+            remaining_accounts[step.output_index as usize].clone()
+        };
+
+        // Check step amount
+        let step_amount = if step.percent == 100 {
+            current_amount
+        } else {
+            (current_amount as u128 * step.percent as u128 / 100) as u64
+        };
+        if step_amount == 0 {
+            return Err(ErrorCode::InvalidCalculation.into());
+        }
+
+        // Check for partial swaps: same input vault and percent < 100
+        if step.percent < 100 {
+            if input_vault_key.is_none() {
+                input_vault_key = Some(input_vault_account.key());
+            }
+            if input_vault_key == Some(input_vault_account.key()) {
+                is_partial_swap = true;
+            }
+            // Track DEXes for partial swaps
+            let adapter_info = adapter_registry
+                .supported_adapters
+                .iter()
+                .find(|a| a.swap_type == step.swap)
+                .ok_or(ErrorCode::SwapNotSupported)?;
+            if !used_dexes.contains(&adapter_info.program_id) {
+                used_dexes.push(adapter_info.program_id);
+            }
+        }
+
+        // Check for multi-hop: input vault matches a previous output vault
+        if i > 0 {
+            for prev_step in route_plan.iter().take(i) {
+                let prev_output_vault = &remaining_accounts[prev_step.output_index as usize];
+                if input_vault_account.key() == prev_output_vault.key() {
+                    is_multi_hop = true;
+                    break;
+                }
+            }
+        }
+
+        // Validate multi-hop: ensure input mint matches previous output mint
+        if is_multi_hop && i > 0 {
+            let input_vault_data = TokenAccount::try_deserialize(&mut input_vault_account.data.borrow().as_ref())?;
+            let prev_output_mint = output_mints[i - 1];
+            if input_vault_data.mint != prev_output_mint {
+                return Err(ErrorCode::InvalidMultiHopRoute.into());
+            }
+        }
+
+        // Determine output mint
+        let output_mint = if i == route_plan.len() - 1 {
+            destination_mint.key()
+        } else {
+            let output_vault_data = TokenAccount::try_deserialize(&mut output_account_info.data.borrow().as_ref())?;
+            output_vault_data.mint
+        };
+        output_mints.push(output_mint);
+
+        // Update current_amount for multi-hop validation
+        if is_multi_hop && output_mint != destination_mint.key() {
+            current_amount = step_amount; // Simulate passing amount to next step
+        }
+
+        // Validate that at least one step produces destination_mint
+        if output_mint == destination_mint.key() {
+            // Track that we have at least one valid output
+        }
+
+        // Validate adapter and pool
         if !adapter_registry.is_supported_adapter(&step.swap) {
             return Err(ErrorCode::SwapNotSupported.into());
         }
 
-        let input_vault_account = &remaining_accounts[step.input_index as usize];
         let input_vault_data = TokenAccount::try_deserialize(&mut input_vault_account.data.borrow().as_ref())?;
         if i == 0 && input_vault_data.mint != source_mint.key() {
             return Err(ErrorCode::InvalidMint.into());
@@ -101,18 +191,37 @@ pub fn validate_route<'info>(
         let adapter = get_adapter(&step.swap, adapter_registry)?;
         let adapter_ctx = AdapterContext {
             token_program: input_token_program.clone(),
-            authority: input_vault_account.clone(), // Placeholder; adjust if vault_authority is needed
+            authority: vault_authority.clone(),
             input_account: input_vault_account.clone(),
-            output_account: if i == route_plan.len() - 1 {
-                destination_mint.clone()
-            } else {
-                remaining_accounts[step.output_index as usize].clone()
-            },
+            output_account: output_account_info,
             remaining_accounts,
             program_id: *program_id,
         };
 
         adapter.validate_accounts(adapter_ctx, step.input_index as usize + 1)?;
+    }
+
+    // Validate partial swap: ensure multiple DEXes and same input vault
+    if is_partial_swap {
+        let total_percent: u8 = route_plan
+            .iter()
+            .filter(|step| {
+                let input_vault = &remaining_accounts[step.input_index as usize];
+                input_vault_key == Some(input_vault.key())
+            })
+            .map(|step| step.percent)
+            .sum();
+        if total_percent != 100 {
+            return Err(ErrorCode::InvalidPartialSwapPercent.into());
+        }
+        if used_dexes.len() < 2 {
+            return Err(ErrorCode::InsufficientDexesForPartialSwap.into());
+        }
+    }
+
+    // Ensure at least one step produces destination_mint
+    if !output_mints.iter().any(|mint| *mint == destination_mint.key()) {
+        return Err(ErrorCode::NoOutputProduced.into());
     }
 
     Ok(())

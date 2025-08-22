@@ -14,6 +14,19 @@ pub struct SwapEventData {
     pub output_amount: u64,
 }
 
+/// Executes a route plan, handling partial swaps, multi-hop swaps, and partial multi-hop swaps
+/// # Arguments
+/// * `adapter_registry` - The adapter registry containing supported adapters
+/// * `input_token_program` - The token program for transfers
+/// * `vault_authority` - The authority for the vault accounts
+/// * `source_mint` - The mint of the input token
+/// * `user_destination_token_account` - The user's destination token account
+/// * `route_plan` - Array of route plan steps
+/// * `remaining_accounts` - Additional accounts required for swaps
+/// * `program_id` - The program ID of this program
+/// * `in_amount` - The total input amount for the route
+/// # Returns
+/// * `Result<(u64, Vec<SwapEventData>)>` - The final output amount and swap event data
 pub fn execute_route<'info>(
     adapter_registry: &Account<'info, AdapterRegistry>,
     input_token_program: &AccountInfo<'info>,
@@ -26,18 +39,20 @@ pub fn execute_route<'info>(
     in_amount: u64,
 ) -> Result<(u64, Vec<SwapEventData>)> {
     let mut current_amount = in_amount;
-    let mut output_amount = 0;
-    let mut event_data = Vec::new();
+    let mut total_output_amount: u64 = 0;
+    let mut event_data:Vec<SwapEventData> = Vec::new();
+    let destination_mint = user_destination_token_account.key();
 
-    // Execute each step in the route plan
+    // Process each step in the route plan
     for (i, step) in route_plan.iter().enumerate() {
-        let step_amount = (current_amount as u128 * step.percent as u128 / 100) as u64;
-        if step_amount == 0 {
-            return Err(ErrorCode::InvalidCalculation.into());
-        }
+        // Calculate input amount for this step
+        let step_amount = if step.percent == 100 {
+            current_amount
+        } else {
+            (current_amount as u128 * step.percent as u128 / 100) as u64
+        };
 
         let input_vault_account = &remaining_accounts[step.input_index as usize];
-
         let output_account_info = if i == route_plan.len() - 1 {
             user_destination_token_account.clone()
         } else {
@@ -65,10 +80,7 @@ pub fn execute_route<'info>(
         // Execute the swap
         let swap_result = adapter.execute_swap(adapter_ctx, step_amount, step.input_index as usize + 1)?;
 
-        output_amount += swap_result.output_amount;
-        current_amount = swap_result.output_amount;
-
-        // Collect data for SwapEvent
+        // Determine output mint
         let output_mint = if i != route_plan.len() - 1 {
             let output_vault_data = TokenAccount::try_deserialize(&mut output_account_info.data.borrow().as_ref())?;
             output_vault_data.mint
@@ -76,14 +88,23 @@ pub fn execute_route<'info>(
             user_destination_token_account.key()
         };
 
+        // Update amounts: accumulate only if output mint matches destination_mint
+        if output_mint == destination_mint {
+            total_output_amount = total_output_amount.saturating_add(swap_result.output_amount);
+        } else {
+            // For non-final steps in multi-hop, update current_amount
+            current_amount = swap_result.output_amount;
+        }
+
+        // Record swap event
         event_data.push(SwapEventData {
             amm: adapter_info.program_id,
-            input_mint: source_mint.key(),
+            input_mint: if i == 0 { source_mint.key() } else { event_data[i - 1].output_mint },
             input_amount: step_amount,
             output_mint,
-            output_amount: current_amount,
+            output_amount: swap_result.output_amount,
         });
     }
 
-    Ok((output_amount, event_data))
+    Ok((total_output_amount, event_data))
 }

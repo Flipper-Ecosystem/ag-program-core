@@ -78,11 +78,13 @@ pub fn route<'info>(
         &ctx.accounts.adapter_registry,
         &ctx.accounts.input_token_program,
         &ctx.accounts.output_token_program,
+        &ctx.accounts.vault_authority.to_account_info(),
         &ctx.accounts.source_mint,
         &ctx.accounts.destination_mint,
         &route_plan,
         ctx.remaining_accounts,
         ctx.program_id,
+        in_amount
     )?;
 
     let vault_authority_bump = ctx.bumps.vault_authority;
