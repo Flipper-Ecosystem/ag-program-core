@@ -65,5 +65,11 @@ pub enum ErrorCode {
     #[msg("Pool disabled")]
     PoolDisabled = 6049,
     #[msg("Invalid token program for mint")]
-    InvalidTokenProgram = 6050
+    InvalidTokenProgram = 6050,
+    #[msg("Invalid platform fee owner")]
+    InvalidPlatformFeeOwner = 6051,
+    #[msg("Invalid platform fee mint")]
+    InvalidPlatformFeeMint = 6052,
+    #[msg("Invalid amount")]
+    InvalidAmount = 6053
 }

@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Mint};
+use anchor_spl::token::{self, Token, TokenAccount, Mint, Transfer, transfer};
 use crate::errors::ErrorCode;
 
 
@@ -298,4 +298,53 @@ pub fn vault_exists(
     remaining_accounts
         .iter()
         .any(|account| account.key() == vault_address)
+}
+
+/// Accounts for withdrawing platform fees
+#[derive(Accounts)]
+pub struct WithdrawPlatformFees<'info> {
+    #[account(
+        seeds = [b"vault_authority"],
+        bump = vault_authority.bump,
+        constraint = vault_authority.admin != Pubkey::default() @ ErrorCode::VaultAuthorityNotInitialized,
+        constraint = vault_authority.admin == admin.key() @ ErrorCode::UnauthorizedAdmin
+    )]
+    pub vault_authority: Account<'info, VaultAuthority>,
+    #[account(
+        mut,
+        constraint = platform_fee_account.owner == vault_authority.key() @ ErrorCode::InvalidPlatformFeeOwner
+    )]
+    pub platform_fee_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub destination: Account<'info, TokenAccount>,
+    pub admin: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+}
+
+pub fn withdraw_platform_fees(ctx: Context<WithdrawPlatformFees>, amount: u64) -> Result<()> {
+    if amount == 0 {
+        return Err(ErrorCode::InvalidAmount.into());
+    }
+
+    let vault_authority_bump = ctx.accounts.vault_authority.bump;
+    let authority_seeds = [
+        b"vault_authority".as_ref(),
+        &[vault_authority_bump],
+    ];
+    let signer_seeds = [&authority_seeds[..]];
+
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.platform_fee_account.to_account_info(),
+        to: ctx.accounts.destination.to_account_info(),
+        authority: ctx.accounts.vault_authority.to_account_info(),
+    };
+    let cpi_ctx = CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        cpi_accounts,
+        &signer_seeds,
+    );
+
+    transfer(cpi_ctx, amount)?;
+    msg!("Withdrew {} tokens from platform fee account to {}", amount, ctx.accounts.destination.key());
+    Ok(())
 }

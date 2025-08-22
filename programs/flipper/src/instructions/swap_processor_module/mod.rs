@@ -7,7 +7,7 @@ use crate::errors::ErrorCode;
 use crate::state::*;
 use crate::instructions::route_validator_module;
 use crate::instructions::route_executor_module;
-
+use crate::instructions::vault_manager_module::{VaultAuthority};
 #[event_cpi]
 #[derive(Accounts)]
 #[instruction(route_plan: Vec<RoutePlanStep>)]
@@ -21,8 +21,7 @@ pub struct Route<'info> {
         seeds = [b"vault_authority"],
         bump
     )]
-    /// CHECK: vault authority
-    pub vault_authority: AccountInfo<'info>,
+    pub vault_authority: Account<'info, VaultAuthority>,
 
     // Separate token programs for input and output
     /// CHECK: Input token program (SPL Token or Token2022)
@@ -62,6 +61,16 @@ pub fn route<'info>(
 ) -> Result<u64> {
     if slippage_bps > 10_000 {
         return Err(ErrorCode::InvalidSlippage.into());
+    }
+
+    // Validate platform_fee_account if provided
+    if let Some(platform_fee_account) = &ctx.accounts.platform_fee_account {
+        if platform_fee_account.owner != ctx.accounts.vault_authority.key() {
+            return Err(ErrorCode::InvalidPlatformFeeOwner.into());
+        }
+        if platform_fee_account.mint != ctx.accounts.destination_mint.key() {
+            return Err(ErrorCode::InvalidPlatformFeeMint.into());
+        }
     }
 
     // Validate route and accounts
@@ -110,7 +119,7 @@ pub fn route<'info>(
     let (mut output_amount, event_data) = route_executor_module::execute_route(
         &ctx.accounts.adapter_registry,
         &ctx.accounts.input_token_program,
-        &ctx.accounts.vault_authority,
+        &ctx.accounts.vault_authority.to_account_info(),
         &ctx.accounts.source_mint,
         &ctx.accounts.user_destination_token_account.to_account_info(),
         &route_plan,

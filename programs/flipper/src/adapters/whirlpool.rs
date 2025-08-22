@@ -194,7 +194,12 @@ impl DexAdapter for WhirlpoolAdapter {
             return Err(ErrorCode::InvalidAccount.into());
         }
 
-        // Execute CPI call with proper signer seeds
+        let vault_authority_bump = Pubkey::find_program_address(
+            &[b"vault_authority"],
+            &ctx.program_id,
+        ).1;
+
+        // Prepare signer seeds for CPI call
         let authority_seeds: &[&[u8]] = &[b"vault_authority", &[vault_authority_bump]];
         let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
 
