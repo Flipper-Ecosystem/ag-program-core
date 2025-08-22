@@ -2,14 +2,11 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount, Transfer, transfer, InitializeAccount, initialize_account};
 use anchor_spl::token_2022::{Token2022};
 use anchor_lang::solana_program::{program::invoke_signed, system_instruction};
-use crate::adapters::adapter_connector_module::{AdapterContext, get_adapter};
+use crate::adapters::adapter_connector_module::AdapterContext;
 use crate::errors::ErrorCode;
 use crate::state::*;
 use crate::instructions::route_validator_module;
-
-// Program IDs for validation
-const TOKEN_PROGRAM_ID: Pubkey = anchor_spl::token::ID;
-const TOKEN_2022_PROGRAM_ID: Pubkey = anchor_spl::token_2022::ID;
+use crate::instructions::route_executor_module;
 
 #[event_cpi]
 #[derive(Accounts)]
@@ -79,10 +76,6 @@ pub fn route<'info>(
         ctx.program_id,
     )?;
 
-    let adapter_registry = &ctx.accounts.adapter_registry;
-    let mut current_amount = in_amount;
-    let mut output_amount = 0;
-
     let vault_authority_bump = ctx.bumps.vault_authority;
     let authority_seeds: &[&[u8]] = &[
         b"vault_authority".as_ref(),
@@ -113,60 +106,27 @@ pub fn route<'info>(
     let cpi_ctx_transfer = CpiContext::new(input_token_program_info.clone(), cpi_accounts_transfer);
     transfer(cpi_ctx_transfer, in_amount)?;
 
-    // Execute each step in the route plan
-    for (i, step) in route_plan.iter().enumerate() {
-        let step_amount = (current_amount as u128 * step.percent as u128 / 100) as u64;
-        if step_amount == 0 {
-            return Err(ErrorCode::InvalidCalculation.into());
-        }
+    // Execute the route and collect event data
+    let (mut output_amount, event_data) = route_executor_module::execute_route(
+        &ctx.accounts.adapter_registry,
+        &ctx.accounts.input_token_program,
+        &ctx.accounts.vault_authority,
+        &ctx.accounts.source_mint,
+        &ctx.accounts.user_destination_token_account.to_account_info(),
+        &route_plan,
+        ctx.remaining_accounts,
+        ctx.program_id,
+        in_amount,
+    )?;
 
-        let input_vault_account = &ctx.remaining_accounts[step.input_index as usize];
-
-        let output_account_info = if i == route_plan.len() - 1 {
-            ctx.accounts.user_destination_token_account.to_account_info()
-        } else {
-            ctx.remaining_accounts[step.output_index as usize].clone()
-        };
-
-        // Get adapter
-        let adapter = get_adapter(&step.swap, adapter_registry)?;
-        let adapter_info = adapter_registry
-            .supported_adapters
-            .iter()
-            .find(|a| a.swap_type == step.swap)
-            .ok_or(ErrorCode::SwapNotSupported)?;
-
-        // Create adapter context
-        let adapter_ctx = AdapterContext {
-            token_program: input_token_program_info.clone(),
-            authority: ctx.accounts.vault_authority.to_account_info(),
-            input_account: input_vault_account.clone(),
-            output_account: output_account_info.clone(),
-            remaining_accounts: ctx.remaining_accounts,
-            program_id: ctx.program_id.clone(),
-        };
-
-        // Execute the swap
-        let swap_result = adapter.execute_swap(adapter_ctx, step_amount, step.input_index as usize + 1)?;
-
-        output_amount += swap_result.output_amount;
-        current_amount = swap_result.output_amount;
-
-        // Get output mint for event emission
-        let output_mint = if i != route_plan.len() - 1 {
-            let output_vault_data = TokenAccount::try_deserialize(&mut output_account_info.data.borrow().as_ref())?;
-            output_vault_data.mint
-        } else {
-            ctx.accounts.destination_mint.key()
-        };
-
-        // Emit swap event
+    // Emit swap events
+    for event in event_data {
         emit_cpi!(SwapEvent {
-            amm: adapter_info.program_id,
-            input_mint: ctx.accounts.source_mint.key(),
-            input_amount: step_amount,
-            output_mint,
-            output_amount: current_amount,
+            amm: event.amm,
+            input_mint: event.input_mint,
+            input_amount: event.input_amount,
+            output_mint: event.output_mint,
+            output_amount: event.output_amount,
         });
     }
 

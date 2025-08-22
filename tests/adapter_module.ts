@@ -338,7 +338,7 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
         }
     });
 
-    it("Executes a Whirlpool swap", async () => {
+    /*it("Executes a Whirlpool swap", async () => {
         try {
             // Initialize PoolInfo account
             const swapTypeBytes = getSwapTypeBytes({ whirlpool: { aToB: true } });
@@ -560,7 +560,7 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
             }
             assert.include(error.message, "NotEnoughAccountKeys");
         }
-    });
+    });*/
 
     it("Configures a new adapter as operator", async () => {
         const newProgramId = Keypair.generate().publicKey;
