@@ -29,7 +29,7 @@ pub mod mock_raydium_swap {
         // Transfer initial tokens to vaults
         anchor_spl::token::transfer(
             CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_a_program.to_account_info(),
                 anchor_spl::token::Transfer {
                     from: ctx.accounts.user_token_a.to_account_info(),
                     to: ctx.accounts.token_a_vault.to_account_info(),
@@ -41,7 +41,7 @@ pub mod mock_raydium_swap {
 
         anchor_spl::token::transfer(
             CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.token_b_program.to_account_info(),
                 anchor_spl::token::Transfer {
                     from: ctx.accounts.user_token_b.to_account_info(),
                     to: ctx.accounts.token_b_vault.to_account_info(),
@@ -97,11 +97,11 @@ pub mod mock_raydium_swap {
         // Transfer input tokens from user to vault
         anchor_spl::token::transfer(
             CpiContext::new(
-                ctx.accounts.token_program_a.to_account_info(),
+                ctx.accounts.input_token_program.to_account_info(),
                 anchor_spl::token::Transfer {
-                    from: ctx.accounts.user_token_a.to_account_info(),
+                    from: ctx.accounts.input_token_account.to_account_info(),
                     to: ctx.accounts.token_a_vault.to_account_info(),
-                    authority: ctx.accounts.user.to_account_info(),
+                    authority: ctx.accounts.payer.to_account_info(),
                 },
             ),
             amount_in,
@@ -115,10 +115,10 @@ pub mod mock_raydium_swap {
         ];
         anchor_spl::token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program_b.to_account_info(),
+                ctx.accounts.output_token_program.to_account_info(),
                 anchor_spl::token::Transfer {
                     from: ctx.accounts.token_b_vault.to_account_info(),
-                    to: ctx.accounts.user_token_b.to_account_info(),
+                    to: ctx.accounts.output_token_account.to_account_info(),
                     authority: ctx.accounts.authority.to_account_info(),
                 },
                 &[authority_seeds],
@@ -156,6 +156,7 @@ pub struct InitializePool<'info> {
         payer = user,
         associated_token::mint = token_a_mint,
         associated_token::authority = user,
+        associated_token::token_program = token_a_program,
     )]
     pub user_token_a: Account<'info, TokenAccount>,
 
@@ -164,6 +165,7 @@ pub struct InitializePool<'info> {
         payer = user,
         associated_token::mint = token_b_mint,
         associated_token::authority = user,
+        associated_token::token_program = token_b_program,
     )]
     pub user_token_b: Account<'info, TokenAccount>,
 
@@ -172,6 +174,7 @@ pub struct InitializePool<'info> {
         payer = user,
         associated_token::mint = token_a_mint,
         associated_token::authority = authority,
+        associated_token::token_program = token_a_program,
     )]
     pub token_a_vault: Account<'info, TokenAccount>,
 
@@ -180,20 +183,18 @@ pub struct InitializePool<'info> {
         payer = user,
         associated_token::mint = token_b_mint,
         associated_token::authority = authority,
+        associated_token::token_program = token_b_program,
     )]
     pub token_b_vault: Account<'info, TokenAccount>,
 
-    pub token_a_mint: Account<'info, Mint>,
+    pub token_a_mint: Account<'info,Mint>,
+    pub token_b_mint: Account<'info,Mint>,
 
-    pub token_b_mint: Account<'info, Mint>,
-
-    pub token_program: Program<'info, Token>,
+    pub token_a_program: Program<'info, Token>,
+    pub token_b_program: Program<'info, Token>,
 
     pub associated_token_program: Program<'info, AssociatedToken>,
-
-    pub system_program: Program<'info, System>,
-
-    pub rent: Sysvar<'info, Rent>,
+    pub system_program: Program<'info, System>
 }
 
 #[derive(Accounts)]
@@ -206,6 +207,7 @@ pub struct InitializeUserTokenAccounts<'info> {
         payer = user,
         associated_token::mint = token_a_mint,
         associated_token::authority = user,
+        associated_token::token_program = token_a_program,
     )]
     pub user_token_a: Account<'info, TokenAccount>,
 
@@ -214,87 +216,83 @@ pub struct InitializeUserTokenAccounts<'info> {
         payer = user,
         associated_token::mint = token_b_mint,
         associated_token::authority = user,
+        associated_token::token_program = token_b_program,
     )]
     pub user_token_b: Account<'info, TokenAccount>,
 
     pub token_a_mint: Account<'info, Mint>,
-
     pub token_b_mint: Account<'info, Mint>,
 
-    pub token_program: Program<'info, Token>,
+    pub token_a_program: Program<'info, Token>,
+    pub token_b_program: Program<'info, Token>,
 
     pub associated_token_program: Program<'info, AssociatedToken>,
-
     pub system_program: Program<'info, System>,
-
     pub rent: Sysvar<'info, Rent>,
 }
+
 
 #[derive(Accounts)]
 pub struct Swap<'info> {
     #[account(mut)]
-    pub user: Signer<'info>,
+    pub payer: Signer<'info>,
 
     #[account(
         seeds = [b"authority", pool_state.key().as_ref()],
         bump,
     )]
-
     /// CHECK: PDA authority for vaults, verified by seeds
     pub authority: UncheckedAccount<'info>,
 
-    /// CHECK: amm config
+    /// CHECK: AMM config
     pub amm_config: UncheckedAccount<'info>,
 
     #[account(
         mut,
-        seeds = [b"pool_state", token_a_mint.key().as_ref(), token_b_mint.key().as_ref()],
+        seeds = [b"pool_state", input_token_mint.key().as_ref(), output_token_mint.key().as_ref()],
         bump,
         has_one = token_a_vault,
         has_one = token_b_vault,
     )]
     pub pool_state: Box<Account<'info, PoolState>>,
 
-
     #[account(
         mut,
-        associated_token::mint = token_a_mint,
-        associated_token::authority = user,
+        associated_token::mint = input_token_mint,
+        associated_token::authority = payer,
     )]
-    pub user_token_a: Account<'info, TokenAccount>,
+    pub input_token_account: Account<'info, TokenAccount>,
 
     #[account(
         mut,
-        associated_token::mint = token_b_mint,
-        associated_token::authority = user,
+        associated_token::mint = output_token_mint,
+        associated_token::authority = payer,
     )]
-    pub user_token_b: Account<'info, TokenAccount>,
+    pub output_token_account: Account<'info, TokenAccount>,
 
     #[account(
         mut,
-        associated_token::mint = token_a_mint,
+        associated_token::mint = input_token_mint,
         associated_token::authority = authority,
     )]
     pub token_a_vault: Account<'info, TokenAccount>,
 
     #[account(
         mut,
-        associated_token::mint = token_b_mint,
+        associated_token::mint = output_token_mint,
         associated_token::authority = authority,
     )]
     pub token_b_vault: Account<'info, TokenAccount>,
 
-    pub token_program_a: Program<'info, Token>,
-    pub token_program_b: Program<'info, Token>,
+    pub input_token_program: Program<'info, Token>,
+    pub output_token_program: Program<'info, Token>,
 
-    pub token_a_mint: Account<'info, Mint>,
+    pub input_token_mint: Account<'info, Mint>,
+    pub output_token_mint: Account<'info, Mint>,
 
-    pub token_b_mint: Account<'info, Mint>,
-
-    /// CHECK observation
+    #[account(mut)]
+    /// CHECK: Observation state
     pub observation_state: UncheckedAccount<'info>,
-
-    pub system_program: Program<'info, System>,
 }
 
 #[account]
