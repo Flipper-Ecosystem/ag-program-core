@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{Mint, Token, TokenAccount, Transfer},
+    token_interface::{Mint, TokenAccount, TokenInterface, transfer_checked, TransferChecked},
 };
 
 declare_id!("Fa6sgRmBda2UJpBT1tV3bq27JkLjuRYvnt6TxWqAJT5F");
@@ -15,9 +15,21 @@ pub mod mock_whirlpool_swap {
         initial_token_a_amount: u64,
         initial_token_b_amount: u64,
     ) -> Result<()> {
+        // Validate mints are owned by the provided token programs
+        require!(
+            ctx.accounts.token_mint_a.to_account_info().owner == &ctx.accounts.token_program_a.key(),
+            ErrorCode::InvalidTokenProgram
+        );
+        require!(
+            ctx.accounts.token_mint_b.to_account_info().owner == &ctx.accounts.token_program_b.key(),
+            ErrorCode::InvalidTokenProgram
+        );
+
+        // Validate initial amounts
         require!(initial_token_a_amount > 0, ErrorCode::ZeroAmount);
         require!(initial_token_b_amount > 0, ErrorCode::ZeroAmount);
 
+        // Initialize whirlpool state
         let whirlpool = &mut ctx.accounts.whirlpool;
         whirlpool.token_vault_a = ctx.accounts.token_vault_a.key();
         whirlpool.token_vault_b = ctx.accounts.token_vault_b.key();
@@ -27,34 +39,50 @@ pub mod mock_whirlpool_swap {
         whirlpool.liquidity = initial_token_a_amount as u128 * initial_token_b_amount as u128;
         whirlpool.tick_current_index = 0;
 
-        anchor_spl::token::transfer(
+        // Transfer initial tokens to vaults
+        transfer_checked(
             CpiContext::new(
                 ctx.accounts.token_program_a.to_account_info(),
-                Transfer {
+                TransferChecked {
                     from: ctx.accounts.user_token_a.to_account_info(),
                     to: ctx.accounts.token_vault_a.to_account_info(),
                     authority: ctx.accounts.user.to_account_info(),
+                    mint: ctx.accounts.token_mint_a.to_account_info(),
                 },
             ),
             initial_token_a_amount,
+            ctx.accounts.token_mint_a.decimals,
         )?;
 
-        anchor_spl::token::transfer(
+        transfer_checked(
             CpiContext::new(
                 ctx.accounts.token_program_b.to_account_info(),
-                Transfer {
+                TransferChecked {
                     from: ctx.accounts.user_token_b.to_account_info(),
                     to: ctx.accounts.token_vault_b.to_account_info(),
                     authority: ctx.accounts.user.to_account_info(),
+                    mint: ctx.accounts.token_mint_b.to_account_info(),
                 },
             ),
             initial_token_b_amount,
+            ctx.accounts.token_mint_b.decimals,
         )?;
 
         Ok(())
     }
 
     pub fn initialize_user_token_accounts(ctx: Context<InitializeUserTokenAccounts>) -> Result<()> {
+        // Validate mints are owned by the provided token programs
+        require!(
+            ctx.accounts.token_mint_a.to_account_info().owner == &ctx.accounts.token_program_a.key(),
+            ErrorCode::InvalidTokenProgram
+        );
+        require!(
+            ctx.accounts.token_mint_b.to_account_info().owner == &ctx.accounts.token_program_b.key(),
+            ErrorCode::InvalidTokenProgram
+        );
+
+        // User token accounts are created automatically by associated_token_program
         Ok(())
     }
 
@@ -67,6 +95,17 @@ pub mod mock_whirlpool_swap {
         a_to_b: bool,
         _remaining_accounts_info: Option<RemainingAccountsInfo>,
     ) -> Result<()> {
+        // Validate mints are owned by the provided token programs
+        require!(
+            ctx.accounts.token_mint_a.to_account_info().owner == &ctx.accounts.token_program_a.key(),
+            ErrorCode::InvalidTokenProgram
+        );
+        require!(
+            ctx.accounts.token_mint_b.to_account_info().owner == &ctx.accounts.token_program_b.key(),
+            ErrorCode::InvalidTokenProgram
+        );
+
+        // Validate input amounts
         require!(amount > 0, ErrorCode::ZeroAmount);
         require!(other_amount_threshold > 0, ErrorCode::ZeroAmount);
 
@@ -106,79 +145,97 @@ pub mod mock_whirlpool_swap {
             (calculated_in, amount)
         };
 
+        // Получаем ключи mint'ов для seeds
+        let token_mint_a_key = ctx.accounts.token_mint_a.key();
+        let token_mint_b_key = ctx.accounts.token_mint_b.key();
+
         if a_to_b {
-            whirlpool.token_vault_a_amount = whirlpool.token_vault_a_amount
+            whirlpool.token_vault_a_amount = whirlpool
+                .token_vault_a_amount
                 .checked_add(amount_in)
                 .ok_or(ErrorCode::ArithmeticOverflow)?;
-            whirlpool.token_vault_b_amount = whirlpool.token_vault_b_amount
+            whirlpool.token_vault_b_amount = whirlpool
+                .token_vault_b_amount
                 .checked_sub(amount_out)
                 .ok_or(ErrorCode::ArithmeticOverflow)?;
 
-            anchor_spl::token::transfer(
+            transfer_checked(
                 CpiContext::new(
                     ctx.accounts.token_program_a.to_account_info(),
-                    Transfer {
+                    TransferChecked {
                         from: ctx.accounts.token_owner_account_a.to_account_info(),
                         to: ctx.accounts.token_vault_a.to_account_info(),
                         authority: ctx.accounts.token_authority.to_account_info(),
+                        mint: ctx.accounts.token_mint_a.to_account_info(),
                     },
                 ),
                 amount_in,
+                ctx.accounts.token_mint_a.decimals,
             )?;
 
             let authority_seeds = &[
                 b"whirlpool".as_ref(),
-                ctx.accounts.whirlpool.to_account_info().key.as_ref(),
+                token_mint_a_key.as_ref(),
+                token_mint_b_key.as_ref(),
                 &[ctx.bumps.whirlpool],
             ];
-            anchor_spl::token::transfer(
+            transfer_checked(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program_b.to_account_info(),
-                    Transfer {
+                    TransferChecked {
                         from: ctx.accounts.token_vault_b.to_account_info(),
                         to: ctx.accounts.token_owner_account_b.to_account_info(),
                         authority: ctx.accounts.whirlpool.to_account_info(),
+                        mint: ctx.accounts.token_mint_b.to_account_info(),
                     },
                     &[authority_seeds],
                 ),
                 amount_out,
+                ctx.accounts.token_mint_b.decimals,
             )?;
         } else {
-            whirlpool.token_vault_b_amount = whirlpool.token_vault_b_amount
+            whirlpool.token_vault_b_amount = whirlpool
+                .token_vault_b_amount
                 .checked_add(amount_in)
                 .ok_or(ErrorCode::ArithmeticOverflow)?;
-            whirlpool.token_vault_a_amount = whirlpool.token_vault_a_amount
+            whirlpool.token_vault_a_amount = whirlpool
+                .token_vault_a_amount
                 .checked_sub(amount_out)
                 .ok_or(ErrorCode::ArithmeticOverflow)?;
 
-            anchor_spl::token::transfer(
+            transfer_checked(
                 CpiContext::new(
                     ctx.accounts.token_program_b.to_account_info(),
-                    Transfer {
+                    TransferChecked {
                         from: ctx.accounts.token_owner_account_b.to_account_info(),
                         to: ctx.accounts.token_vault_b.to_account_info(),
                         authority: ctx.accounts.token_authority.to_account_info(),
+                        mint: ctx.accounts.token_mint_b.to_account_info(),
                     },
                 ),
                 amount_in,
+                ctx.accounts.token_mint_b.decimals,
             )?;
 
             let authority_seeds = &[
                 b"whirlpool".as_ref(),
-                ctx.accounts.whirlpool.to_account_info().key.as_ref(),
+                token_mint_a_key.as_ref(),
+                token_mint_b_key.as_ref(),
                 &[ctx.bumps.whirlpool],
             ];
-            anchor_spl::token::transfer(
+            transfer_checked(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program_a.to_account_info(),
-                    Transfer {
+                    TransferChecked {
                         from: ctx.accounts.token_vault_a.to_account_info(),
                         to: ctx.accounts.token_owner_account_a.to_account_info(),
                         authority: ctx.accounts.whirlpool.to_account_info(),
+                        mint: ctx.accounts.token_mint_a.to_account_info(),
                     },
                     &[authority_seeds],
                 ),
                 amount_out,
+                ctx.accounts.token_mint_a.decimals,
             )?;
         }
 
@@ -218,7 +275,7 @@ pub struct InitializePool<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_program_a,
     )]
-    pub user_token_a: Account<'info, TokenAccount>,
+    pub user_token_a: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         init_if_needed,
@@ -227,7 +284,7 @@ pub struct InitializePool<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_program_b,
     )]
-    pub user_token_b: Account<'info, TokenAccount>,
+    pub user_token_b: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         init_if_needed,
@@ -236,7 +293,7 @@ pub struct InitializePool<'info> {
         associated_token::authority = whirlpool,
         associated_token::token_program = token_program_a,
     )]
-    pub token_vault_a: Account<'info, TokenAccount>,
+    pub token_vault_a: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         init_if_needed,
@@ -245,13 +302,13 @@ pub struct InitializePool<'info> {
         associated_token::authority = whirlpool,
         associated_token::token_program = token_program_b,
     )]
-    pub token_vault_b: Account<'info, TokenAccount>,
+    pub token_vault_b: InterfaceAccount<'info, TokenAccount>,
 
-    pub token_mint_a: Account<'info, Mint>,
-    pub token_mint_b: Account<'info, Mint>,
+    pub token_mint_a: InterfaceAccount<'info, Mint>,
+    pub token_mint_b: InterfaceAccount<'info, Mint>,
 
-    pub token_program_a: Program<'info, Token>,
-    pub token_program_b: Program<'info, Token>,
+    pub token_program_a: Interface<'info, TokenInterface>,
+    pub token_program_b: Interface<'info, TokenInterface>,
 
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
@@ -269,7 +326,7 @@ pub struct InitializeUserTokenAccounts<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_program_a,
     )]
-    pub user_token_a: Account<'info, TokenAccount>,
+    pub user_token_a: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         init_if_needed,
@@ -278,13 +335,13 @@ pub struct InitializeUserTokenAccounts<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_program_b,
     )]
-    pub user_token_b: Account<'info, TokenAccount>,
+    pub user_token_b: InterfaceAccount<'info, TokenAccount>,
 
-    pub token_mint_a: Account<'info, Mint>,
-    pub token_mint_b: Account<'info, Mint>,
+    pub token_mint_a: InterfaceAccount<'info, Mint>,
+    pub token_mint_b: InterfaceAccount<'info, Mint>,
 
-    pub token_program_a: Program<'info, Token>,
-    pub token_program_b: Program<'info, Token>,
+    pub token_program_a: Interface<'info, TokenInterface>,
+    pub token_program_b: Interface<'info, TokenInterface>,
 
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
@@ -293,8 +350,8 @@ pub struct InitializeUserTokenAccounts<'info> {
 
 #[derive(Accounts)]
 pub struct SwapV2<'info> {
-    pub token_program_a: Program<'info, Token>,
-    pub token_program_b: Program<'info, Token>,
+    pub token_program_a: Interface<'info, TokenInterface>,
+    pub token_program_b: Interface<'info, TokenInterface>,
 
     /// CHECK: Memo program (optional)
     pub memo_program: UncheckedAccount<'info>,
@@ -314,35 +371,39 @@ pub struct SwapV2<'info> {
         mut,
         associated_token::mint = token_mint_a,
         associated_token::authority = token_authority,
+        associated_token::token_program = token_program_a,
     )]
-    pub token_owner_account_a: Account<'info, TokenAccount>,
+    pub token_owner_account_a: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         mut,
         associated_token::mint = token_mint_b,
         associated_token::authority = token_authority,
+        associated_token::token_program = token_program_b,
     )]
-    pub token_owner_account_b: Account<'info, TokenAccount>,
+    pub token_owner_account_b: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         mut,
         associated_token::mint = token_mint_a,
         associated_token::authority = whirlpool,
+        associated_token::token_program = token_program_a,
     )]
-    pub token_vault_a: Account<'info, TokenAccount>,
+    pub token_vault_a: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         mut,
         associated_token::mint = token_mint_b,
         associated_token::authority = whirlpool,
+        associated_token::token_program = token_program_b,
     )]
-    pub token_vault_b: Account<'info, TokenAccount>,
+    pub token_vault_b: InterfaceAccount<'info, TokenAccount>,
 
     /// CHECK: Oracle account (optional)
     pub oracle: UncheckedAccount<'info>,
 
-    pub token_mint_a: Account<'info, Mint>,
-    pub token_mint_b: Account<'info, Mint>,
+    pub token_mint_a: InterfaceAccount<'info, Mint>,
+    pub token_mint_b: InterfaceAccount<'info, Mint>,
 }
 
 #[account]
@@ -367,6 +428,8 @@ pub enum ErrorCode {
     AmountInAboveMaximum,
     #[msg("Arithmetic overflow occurred")]
     ArithmeticOverflow,
+    #[msg("Invalid token program for mint")]
+    InvalidTokenProgram,
 }
 
 fn calculate_swap_amount(amount_in: u64, reserve_in: u64, reserve_out: u64) -> Result<u64> {
