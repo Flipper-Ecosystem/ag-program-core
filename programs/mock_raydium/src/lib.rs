@@ -4,7 +4,7 @@ use anchor_spl::{
     token::{Mint, Token, TokenAccount, Transfer},
 };
 
-declare_id!("CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C");
+declare_id!("FmQ6x78hRZyXJcofk7NSHx9tvPEtEonjsMdAX6FQw7wm");
 
 #[program]
 pub mod mock_raydium_swap {

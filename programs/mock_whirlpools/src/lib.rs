@@ -4,7 +4,7 @@ use anchor_spl::{
     token::{Mint, Token, TokenAccount, Transfer},
 };
 
-declare_id!("whiRLbPwVeYkWoNsENmVKNBsLnDJScrubE8dFGJJkUT");
+declare_id!("Fa6sgRmBda2UJpBT1tV3bq27JkLjuRYvnt6TxWqAJT5F");
 
 #[program]
 pub mod mock_whirlpool_swap {
