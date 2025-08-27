@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{Mint, Token, TokenAccount, Transfer},
+    token_interface::{Mint, TokenAccount, TokenInterface, transfer_checked, TransferChecked},
 };
 
 declare_id!("699YWVLRa4T5Mxs3iNJGnpwP24JNckt25vW1pEMc5xrA");
@@ -10,12 +10,21 @@ declare_id!("699YWVLRa4T5Mxs3iNJGnpwP24JNckt25vW1pEMc5xrA");
 pub mod mock_meteora_swap {
     use super::*;
 
-
     pub fn initialize_pool(
         ctx: Context<InitializePool>,
         initial_token_x_amount: u64,
         initial_token_y_amount: u64,
     ) -> Result<()> {
+        // Validate mints are owned by the provided token programs
+        require!(
+            ctx.accounts.token_x_mint.to_account_info().owner == &ctx.accounts.token_x_program.key(),
+            ErrorCode::InvalidTokenProgram
+        );
+        require!(
+            ctx.accounts.token_y_mint.to_account_info().owner == &ctx.accounts.token_y_program.key(),
+            ErrorCode::InvalidTokenProgram
+        );
+
         // Validate initial amounts
         require!(initial_token_x_amount > 0, ErrorCode::ZeroAmount);
         require!(initial_token_y_amount > 0, ErrorCode::ZeroAmount);
@@ -28,28 +37,32 @@ pub mod mock_meteora_swap {
         lb_pair.token_y_vault_amount = initial_token_y_amount;
 
         // Transfer initial tokens to reserves
-        anchor_spl::token::transfer(
+        transfer_checked(
             CpiContext::new(
                 ctx.accounts.token_x_program.to_account_info(),
-                anchor_spl::token::Transfer {
+                TransferChecked {
                     from: ctx.accounts.user_token_x.to_account_info(),
                     to: ctx.accounts.reserve_x.to_account_info(),
                     authority: ctx.accounts.user.to_account_info(),
+                    mint: ctx.accounts.token_x_mint.to_account_info(),
                 },
             ),
             initial_token_x_amount,
+            ctx.accounts.token_x_mint.decimals,
         )?;
 
-        anchor_spl::token::transfer(
+        transfer_checked(
             CpiContext::new(
                 ctx.accounts.token_y_program.to_account_info(),
-                anchor_spl::token::Transfer {
+                TransferChecked {
                     from: ctx.accounts.user_token_y.to_account_info(),
                     to: ctx.accounts.reserve_y.to_account_info(),
                     authority: ctx.accounts.user.to_account_info(),
+                    mint: ctx.accounts.token_y_mint.to_account_info(),
                 },
             ),
             initial_token_y_amount,
+            ctx.accounts.token_y_mint.decimals,
         )?;
 
         // Initialize oracle (mock: set initialized flag)
@@ -60,6 +73,16 @@ pub mod mock_meteora_swap {
     }
 
     pub fn initialize_user_token_accounts(ctx: Context<InitializeUserTokenAccounts>) -> Result<()> {
+        // Validate mints are owned by the provided token programs
+        require!(
+            ctx.accounts.token_x_mint.to_account_info().owner == &ctx.accounts.token_x_program.key(),
+            ErrorCode::InvalidTokenProgram
+        );
+        require!(
+            ctx.accounts.token_y_mint.to_account_info().owner == &ctx.accounts.token_y_program.key(),
+            ErrorCode::InvalidTokenProgram
+        );
+
         // User token accounts are created by associated_token_program
         Ok(())
     }
@@ -70,6 +93,16 @@ pub mod mock_meteora_swap {
         min_amount_out: u64,
         _remaining_accounts_info: RemainingAccountsInfo,
     ) -> Result<()> {
+        // Validate mints are owned by the provided token programs
+        require!(
+            ctx.accounts.token_x_mint.to_account_info().owner == &ctx.accounts.token_x_program.key(),
+            ErrorCode::InvalidTokenProgram
+        );
+        require!(
+            ctx.accounts.token_y_mint.to_account_info().owner == &ctx.accounts.token_y_program.key(),
+            ErrorCode::InvalidTokenProgram
+        );
+
         // Validate input amounts
         require!(amount_in > 0, ErrorCode::ZeroAmount);
         require!(min_amount_out > 0, ErrorCode::ZeroAmount);
@@ -91,8 +124,8 @@ pub mod mock_meteora_swap {
                 &ctx.accounts.user_token_out,
                 &ctx.accounts.token_x_program,
                 &ctx.accounts.token_y_program,
-                ctx.accounts.token_x_mint.key(),
-                ctx.accounts.token_y_mint.key(),
+                &ctx.accounts.token_x_mint,
+                &ctx.accounts.token_y_mint,
             )
         } else {
             (
@@ -104,18 +137,18 @@ pub mod mock_meteora_swap {
                 &ctx.accounts.user_token_out,
                 &ctx.accounts.token_y_program,
                 &ctx.accounts.token_x_program,
-                ctx.accounts.token_y_mint.key(),
-                ctx.accounts.token_x_mint.key(),
+                &ctx.accounts.token_y_mint,
+                &ctx.accounts.token_x_mint,
             )
         };
 
         // Validate token mints
         require!(
-            user_token_in.mint == mint_in,
+            user_token_in.mint == mint_in.key(),
             ErrorCode::InvalidMint
         );
         require!(
-            user_token_out.mint == mint_out,
+            user_token_out.mint == mint_out.key(),
             ErrorCode::InvalidMint
         );
 
@@ -150,16 +183,18 @@ pub mod mock_meteora_swap {
         }
 
         // Transfer input tokens from user to vault
-        anchor_spl::token::transfer(
+        transfer_checked(
             CpiContext::new(
                 token_program_in.to_account_info(),
-                anchor_spl::token::Transfer {
+                TransferChecked {
                     from: user_token_in.to_account_info(),
                     to: vault_in.to_account_info(),
                     authority: ctx.accounts.user.to_account_info(),
+                    mint: mint_in.to_account_info(),
                 },
             ),
             amount_in,
+            mint_in.decimals,
         )?;
 
         // Transfer output tokens from vault to user using lb_pair as authority
@@ -171,28 +206,28 @@ pub mod mock_meteora_swap {
             token_y_mint_key.as_ref(),
             &[ctx.bumps.lb_pair],
         ];
-        anchor_spl::token::transfer(
+        transfer_checked(
             CpiContext::new_with_signer(
                 token_program_out.to_account_info(),
-                anchor_spl::token::Transfer {
+                TransferChecked {
                     from: vault_out.to_account_info(),
                     to: user_token_out.to_account_info(),
                     authority: ctx.accounts.lb_pair.to_account_info(),
+                    mint: mint_out.to_account_info(),
                 },
                 &[authority_seeds],
             ),
             amount_out,
+            mint_out.decimals,
         )?;
 
         // Update oracle (mock: set timestamp)
         let oracle = &mut ctx.accounts.oracle;
         oracle.last_update_timestamp = Clock::get()?.unix_timestamp;
 
-        // Note: host_fee_in and memo_program are included but not used in this mock logic
         Ok(())
     }
 }
-
 
 #[derive(Accounts)]
 pub struct InitializePool<'info> {
@@ -209,40 +244,40 @@ pub struct InitializePool<'info> {
     pub lb_pair: Account<'info, LbPair>,
 
     #[account(
-        init,
+        init_if_needed,
         payer = user,
         associated_token::mint = token_x_mint,
         associated_token::authority = user,
         associated_token::token_program = token_x_program,
     )]
-    pub user_token_x: Account<'info, TokenAccount>,
+    pub user_token_x: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        init,
+        init_if_needed,
         payer = user,
         associated_token::mint = token_y_mint,
         associated_token::authority = user,
         associated_token::token_program = token_y_program,
     )]
-    pub user_token_y: Account<'info, TokenAccount>,
+    pub user_token_y: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        init,
+        init_if_needed,
         payer = user,
         associated_token::mint = token_x_mint,
         associated_token::authority = lb_pair,
         associated_token::token_program = token_x_program,
     )]
-    pub reserve_x: Account<'info, TokenAccount>,
+    pub reserve_x: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        init,
+        init_if_needed,
         payer = user,
         associated_token::mint = token_y_mint,
         associated_token::authority = lb_pair,
         associated_token::token_program = token_y_program,
     )]
-    pub reserve_y: Account<'info, TokenAccount>,
+    pub reserve_y: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         init,
@@ -253,27 +288,15 @@ pub struct InitializePool<'info> {
     )]
     pub oracle: Account<'info, Oracle>,
 
-    pub token_x_mint: Account<'info, Mint>,
+    pub token_x_mint: InterfaceAccount<'info, Mint>,
+    pub token_y_mint: InterfaceAccount<'info, Mint>,
 
-    pub token_y_mint: Account<'info, Mint>,
-
-    #[account(
-        constraint = token_x_program.key() == anchor_spl::token::ID || token_x_program.key() == anchor_spl::token_2022::ID,
-        constraint = token_x_mint.mint_authority.is_none() || token_x_mint.mint_authority.unwrap() == token_x_program.key(),
-    )]
-    pub token_x_program: Program<'info, Token>,
-
-    #[account(
-        constraint = token_y_program.key() == anchor_spl::token::ID || token_y_program.key() == anchor_spl::token_2022::ID,
-        constraint = token_y_mint.mint_authority.is_none() || token_y_mint.mint_authority.unwrap() == token_y_program.key(),
-    )]
-    pub token_y_program: Program<'info, Token>,
+    pub token_x_program: Interface<'info, TokenInterface>,
+    pub token_y_program: Interface<'info, TokenInterface>,
 
     pub associated_token_program: Program<'info, AssociatedToken>,
-
     pub system_program: Program<'info, System>
 }
-
 
 #[derive(Accounts)]
 pub struct InitializeUserTokenAccounts<'info> {
@@ -281,43 +304,31 @@ pub struct InitializeUserTokenAccounts<'info> {
     pub user: Signer<'info>,
 
     #[account(
-        init,
+        init_if_needed,
         payer = user,
         associated_token::mint = token_x_mint,
         associated_token::authority = user,
         associated_token::token_program = token_x_program,
     )]
-    pub user_token_x: Account<'info, TokenAccount>,
+    pub user_token_x: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        init,
+        init_if_needed,
         payer = user,
         associated_token::mint = token_y_mint,
         associated_token::authority = user,
         associated_token::token_program = token_y_program,
     )]
-    pub user_token_y: Account<'info, TokenAccount>,
+    pub user_token_y: InterfaceAccount<'info, TokenAccount>,
 
-    pub token_x_mint: Account<'info, Mint>,
+    pub token_x_mint: InterfaceAccount<'info, Mint>,
+    pub token_y_mint: InterfaceAccount<'info, Mint>,
 
-    pub token_y_mint: Account<'info, Mint>,
-
-    #[account(
-        constraint = token_x_program.key() == anchor_spl::token::ID || token_x_program.key() == anchor_spl::token_2022::ID,
-        constraint = token_x_mint.mint_authority.is_none() || token_x_mint.mint_authority.unwrap() == token_x_program.key(),
-    )]
-    pub token_x_program: Program<'info, Token>,
-
-    #[account(
-        constraint = token_y_program.key() == anchor_spl::token::ID|| token_y_program.key() == anchor_spl::token_2022::ID,
-        constraint = token_y_mint.mint_authority.is_none() || token_y_mint.mint_authority.unwrap() == token_y_program.key(),
-    )]
-    pub token_y_program: Program<'info, Token>,
+    pub token_x_program: Interface<'info, TokenInterface>,
+    pub token_y_program: Interface<'info, TokenInterface>,
 
     pub associated_token_program: Program<'info, AssociatedToken>,
-
     pub system_program: Program<'info, System>,
-
     pub rent: Sysvar<'info, Rent>,
 }
 
@@ -327,7 +338,7 @@ pub struct Swap2<'info> {
         mut,
         has_one = reserve_x @ ErrorCode::InvalidReserveX,
         has_one = reserve_y @ ErrorCode::InvalidReserveY,
-         seeds = [b"lb_pair", reserve_x.mint.key().as_ref(), reserve_y.mint.key().key().as_ref()],
+        seeds = [b"lb_pair", token_x_mint.key().as_ref(), token_y_mint.key().as_ref()],
         bump
     )]
     pub lb_pair: Account<'info, LbPair>,
@@ -341,34 +352,30 @@ pub struct Swap2<'info> {
         constraint = reserve_x.mint == token_x_mint.key() @ ErrorCode::InvalidMint,
         constraint = reserve_x.owner == lb_pair.key() @ ErrorCode::InvalidOwner,
     )]
-    pub reserve_x: Account<'info, TokenAccount>,
+    pub reserve_x: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         mut,
         constraint = reserve_y.mint == token_y_mint.key() @ ErrorCode::InvalidMint,
         constraint = reserve_y.owner == lb_pair.key() @ ErrorCode::InvalidOwner,
     )]
-    pub reserve_y: Account<'info, TokenAccount>,
+    pub reserve_y: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         mut,
-        constraint = user_token_in.mint == token_x_mint.key() @ ErrorCode::InvalidMint,
         constraint = user_token_in.owner == user.key() @ ErrorCode::InvalidOwner,
     )]
-    pub user_token_in: Account<'info, TokenAccount>,
+    pub user_token_in: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         mut,
-        constraint = user_token_out.mint == token_y_mint.key() @ ErrorCode::InvalidMint,
         constraint = user_token_out.owner == user.key() @ ErrorCode::InvalidOwner,
     )]
-    pub user_token_out: Account<'info, TokenAccount>,
+    pub user_token_out: InterfaceAccount<'info, TokenAccount>,
 
-    pub token_x_mint: Account<'info, Mint>,
+    pub token_x_mint: InterfaceAccount<'info, Mint>,
+    pub token_y_mint: InterfaceAccount<'info, Mint>,
 
-    pub token_y_mint: Account<'info, Mint>,
-
-    /// CHECK: Optional, validated in program logic if used
     #[account(mut)]
     pub oracle: Account<'info, Oracle>,
 
@@ -379,9 +386,8 @@ pub struct Swap2<'info> {
     #[account(signer)]
     pub user: Signer<'info>,
 
-    pub token_x_program: Program<'info, Token>,
-
-    pub token_y_program: Program<'info, Token>,
+    pub token_x_program: Interface<'info, TokenInterface>,
+    pub token_y_program: Interface<'info, TokenInterface>,
 
     ///CHECK memo
     pub memo_program: UncheckedAccount<'info>,
@@ -433,6 +439,7 @@ impl Default for AccountsType {
         AccountsType::BinArrays
     }
 }
+
 #[error_code]
 pub enum ErrorCode {
     #[msg("Amount cannot be zero")]
@@ -449,6 +456,8 @@ pub enum ErrorCode {
     InvalidMint,
     #[msg("Invalid owner")]
     InvalidOwner,
+    #[msg("Invalid token program for mint")]
+    InvalidTokenProgram,
 }
 
 fn calculate_swap_amount(amount_in: u64, reserve_in: u64, reserve_out: u64) -> Result<u64> {
