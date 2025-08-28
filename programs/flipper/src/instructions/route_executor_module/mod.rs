@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{TokenAccount};
+use anchor_spl::token_interface::TokenAccount;
 use crate::adapters::adapter_connector_module::{AdapterContext, get_adapter};
 use crate::errors::ErrorCode;
 use crate::state::*;
@@ -40,7 +40,7 @@ pub fn execute_route<'info>(
 ) -> Result<(u64, Vec<SwapEventData>)> {
     let mut current_amount = in_amount;
     let mut total_output_amount: u64 = 0;
-    let mut event_data:Vec<SwapEventData> = Vec::new();
+    let mut event_data: Vec<SwapEventData> = Vec::new();
     let destination_mint = user_destination_token_account.key();
 
     // Process each step in the route plan
@@ -82,7 +82,8 @@ pub fn execute_route<'info>(
 
         // Determine output mint
         let output_mint = if i != route_plan.len() - 1 {
-            let output_vault_data = TokenAccount::try_deserialize(&mut output_account_info.data.borrow().as_ref())?;
+            let account_data = output_account_info.try_borrow_data()?;
+            let output_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
             output_vault_data.mint
         } else {
             user_destination_token_account.key()

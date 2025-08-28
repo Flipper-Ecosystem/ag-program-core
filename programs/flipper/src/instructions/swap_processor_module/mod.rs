@@ -1,6 +1,8 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Mint, Token, TokenAccount, Transfer, transfer, InitializeAccount, initialize_account};
-use anchor_spl::token_2022::{Token2022};
+use anchor_spl::token_interface::{
+    Mint, TokenAccount, TokenInterface,
+    transfer_checked, TransferChecked
+};
 use anchor_lang::solana_program::{program::invoke_signed, system_instruction};
 use crate::adapters::adapter_connector_module::AdapterContext;
 use crate::errors::ErrorCode;
@@ -8,6 +10,7 @@ use crate::state::*;
 use crate::instructions::route_validator_module;
 use crate::instructions::route_executor_module;
 use crate::instructions::vault_manager_module::{VaultAuthority};
+
 #[event_cpi]
 #[derive(Accounts)]
 #[instruction(route_plan: Vec<RoutePlanStep>)]
@@ -24,31 +27,31 @@ pub struct Route<'info> {
     pub vault_authority: Account<'info, VaultAuthority>,
 
     // Separate token programs for input and output
-    /// CHECK: Input token program (SPL Token or Token2022)
-    pub input_token_program: AccountInfo<'info>,
-    /// CHECK: Output token program (SPL Token or Token2022)
-    pub output_token_program: AccountInfo<'info>,
+    pub input_token_program: Interface<'info, TokenInterface>,
+    pub output_token_program: Interface<'info, TokenInterface>,
 
     #[account(signer)]
     pub user_transfer_authority: Signer<'info>,
+
     #[account(
         mut,
-        token::mint = source_mint,
-        token::token_program = input_token_program
+        constraint = user_source_token_account.mint == source_mint.key(),
+        constraint = user_source_token_account.owner == user_transfer_authority.key(),
     )]
-    pub user_source_token_account: Account<'info, TokenAccount>,
+    pub user_source_token_account: InterfaceAccount<'info, TokenAccount>,
+
     #[account(
         mut,
-        token::mint = destination_mint,
-        token::token_program = output_token_program
+        constraint = user_destination_token_account.mint == destination_mint.key(),
+        constraint = user_destination_token_account.owner == user_transfer_authority.key(),
     )]
-    pub user_destination_token_account: Account<'info, TokenAccount>,
-    /// CHECK: Mint account for the input token
-    pub source_mint: AccountInfo<'info>,
-    /// CHECK: Mint account for the output token
-    pub destination_mint: AccountInfo<'info>,
+    pub user_destination_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    pub source_mint: InterfaceAccount<'info, Mint>,
+    pub destination_mint: InterfaceAccount<'info, Mint>,
+
     #[account(mut)]
-    pub platform_fee_account: Option<Account<'info, TokenAccount>>,
+    pub platform_fee_account: Option<InterfaceAccount<'info, TokenAccount>>
 }
 
 pub fn route<'info>(
@@ -76,11 +79,11 @@ pub fn route<'info>(
     // Validate route and accounts
     route_validator_module::validate_route(
         &ctx.accounts.adapter_registry,
-        &ctx.accounts.input_token_program,
-        &ctx.accounts.output_token_program,
+        &ctx.accounts.input_token_program.to_account_info(),
+        &ctx.accounts.output_token_program.to_account_info(),
         &ctx.accounts.vault_authority.to_account_info(),
-        &ctx.accounts.source_mint,
-        &ctx.accounts.destination_mint,
+        &ctx.accounts.source_mint.to_account_info(),
+        &ctx.accounts.destination_mint.to_account_info(),
         &route_plan,
         ctx.remaining_accounts,
         ctx.program_id,
@@ -98,8 +101,12 @@ pub fn route<'info>(
     let input_vault = ctx.remaining_accounts
         .iter()
         .find(|acc| {
-            if let Ok(token_account) = TokenAccount::try_deserialize(&mut acc.data.borrow().as_ref()) {
-                token_account.mint == ctx.accounts.source_mint.key()
+            if let Ok(account_data) = acc.try_borrow_data() {
+                if let Ok(token_account) = TokenAccount::try_deserialize(&mut account_data.as_ref()) {
+                    token_account.mint == ctx.accounts.source_mint.key()
+                } else {
+                    false
+                }
             } else {
                 false
             }
@@ -107,22 +114,26 @@ pub fn route<'info>(
         .ok_or(ErrorCode::VaultNotFound)?;
 
     // Transfer initial funds from user to input vault using input token program
-    let input_token_program_info = ctx.accounts.input_token_program.to_account_info();
-
-    let cpi_accounts_transfer = Transfer {
-        from: ctx.accounts.user_source_token_account.to_account_info(),
-        to: input_vault.clone(),
-        authority: ctx.accounts.user_transfer_authority.to_account_info(),
-    };
-    let cpi_ctx_transfer = CpiContext::new(input_token_program_info.clone(), cpi_accounts_transfer);
-    transfer(cpi_ctx_transfer, in_amount)?;
+    transfer_checked(
+        CpiContext::new(
+            ctx.accounts.input_token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.user_source_token_account.to_account_info(),
+                to: input_vault.clone(),
+                authority: ctx.accounts.user_transfer_authority.to_account_info(),
+                mint: ctx.accounts.source_mint.to_account_info(),
+            },
+        ),
+        in_amount,
+        ctx.accounts.source_mint.decimals,
+    )?;
 
     // Execute the route and collect event data
     let (mut output_amount, event_data) = route_executor_module::execute_route(
         &ctx.accounts.adapter_registry,
-        &ctx.accounts.input_token_program,
+        &ctx.accounts.input_token_program.to_account_info(),
         &ctx.accounts.vault_authority.to_account_info(),
-        &ctx.accounts.source_mint,
+        &ctx.accounts.source_mint.to_account_info(),
         &ctx.accounts.user_destination_token_account.to_account_info(),
         &route_plan,
         ctx.remaining_accounts,
@@ -149,8 +160,12 @@ pub fn route<'info>(
             let destination_vault = ctx.remaining_accounts
                 .iter()
                 .find(|acc| {
-                    if let Ok(token_account) = TokenAccount::try_deserialize(&mut acc.data.borrow().as_ref()) {
-                        token_account.mint == ctx.accounts.destination_mint.key()
+                    if let Ok(account_data) = acc.try_borrow_data() {
+                        if let Ok(token_account) = TokenAccount::try_deserialize(&mut account_data.as_ref()) {
+                            token_account.mint == ctx.accounts.destination_mint.key()
+                        } else {
+                            false
+                        }
                     } else {
                         false
                     }
@@ -158,19 +173,20 @@ pub fn route<'info>(
                 .ok_or(ErrorCode::VaultNotFound)?;
 
             // Transfer fee using output token program
-            let output_token_program_info = ctx.accounts.output_token_program.to_account_info();
-
-            let cpi_accounts_fee = Transfer {
-                from: destination_vault.clone(),
-                to: platform_fee_account.to_account_info(),
-                authority: ctx.accounts.vault_authority.to_account_info(),
-            };
-            let cpi_ctx_fee = CpiContext::new_with_signer(
-                output_token_program_info,
-                cpi_accounts_fee,
-                signer_seeds
-            );
-            transfer(cpi_ctx_fee, fee_amount)?;
+            transfer_checked(
+                CpiContext::new_with_signer(
+                    ctx.accounts.output_token_program.to_account_info(),
+                    TransferChecked {
+                        from: destination_vault.clone(),
+                        to: platform_fee_account.to_account_info(),
+                        authority: ctx.accounts.vault_authority.to_account_info(),
+                        mint: ctx.accounts.destination_mint.to_account_info(),
+                    },
+                    signer_seeds
+                ),
+                fee_amount,
+                ctx.accounts.destination_mint.decimals,
+            )?;
 
             // Emit fee event
             emit_cpi!(FeeEvent {
