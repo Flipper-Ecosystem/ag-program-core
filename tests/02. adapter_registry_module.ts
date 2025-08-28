@@ -5,7 +5,7 @@ import { TOKEN_PROGRAM_ID, createMint, createAssociatedTokenAccount, mintTo, get
 import { assert } from "chai";
 import { Flipper } from "../target/types/flipper";
 
-describe("Flipper Swap Protocol - Adapter Module", () => {
+describe("Flipper Swap Protocol - Adapter Registry Module", () => {
     // Configure the client to use the local cluster
     const provider = anchor.AnchorProvider.env();
     anchor.setProvider(provider);
@@ -80,13 +80,13 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
             await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for airdrop confirmation
 
             // Derive adapter registry PDA
-            [adapterRegistry, bump] = await PublicKey.findProgramAddress(
+            [adapterRegistry, bump] = PublicKey.findProgramAddressSync(
                 [Buffer.from("adapter_registry")],
                 program.programId
             );
 
             // Derive vault authority PDA
-            [vaultAuthority, vaultAuthorityBump] = await PublicKey.findProgramAddress(
+            [vaultAuthority, vaultAuthorityBump] = PublicKey.findProgramAddressSync(
                 [Buffer.from("vault_authority")],
                 program.programId
             );
@@ -108,11 +108,11 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
             );
 
             // Derive vault PDAs
-            [inputVault, inputVaultBump] = await PublicKey.findProgramAddress(
+            [inputVault, inputVaultBump] = PublicKey.findProgramAddressSync(
                 [Buffer.from("vault"), sourceMint.toBuffer()],
                 program.programId
             );
-            [outputVault, outputVaultBump] = await PublicKey.findProgramAddress(
+            [outputVault, outputVaultBump] = PublicKey.findProgramAddressSync(
                 [Buffer.from("vault"), destinationMint.toBuffer()],
                 program.programId
             );
@@ -165,28 +165,56 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
             tickArray1 = Keypair.generate().publicKey;
             tickArray2 = Keypair.generate().publicKey;
             oracle = Keypair.generate().publicKey;
-
-            // Check if vaults exist, if not initialize them
-            const inputVaultAccountInfo = await provider.connection.getAccountInfo(inputVault);
-            const outputVaultAccountInfo = await provider.connection.getAccountInfo(outputVault);
-
-            if (!inputVaultAccountInfo || !outputVaultAccountInfo) {
-                // Initialize vaults using your method with payer as signer
+            
+            const vaultAuthorityInfo = await provider.connection.getAccountInfo(vaultAuthority);
+            if (!vaultAuthorityInfo) {
                 await program.methods
-                    .initializeVaults()
+                    .createVaultAuthority()
                     .accounts({
                         vaultAuthority,
                         payer: payer.publicKey,
-                        inputVault,
-                        outputVault,
-                        sourceMint,
-                        destinationMint,
-                        tokenProgram: TOKEN_PROGRAM_ID,
+                        admin: provider.wallet.publicKey,
                         systemProgram: SystemProgram.programId,
                     })
-                    .signers([payer]) // Only payer signs, vault_authority is a PDA
+                    .signers([payer, provider.wallet.payer])
                     .rpc();
             }
+
+            const inputVaultAccountInfo = await provider.connection.getAccountInfo(inputVault);
+            const outputVaultAccountInfo = await provider.connection.getAccountInfo(outputVault);
+
+            if (!inputVaultAccountInfo) {
+                await program.methods
+                    .createVault()
+                    .accounts({
+                        vaultAuthority,
+                        payer: payer.publicKey,
+                        admin: provider.wallet.publicKey,
+                        vault: inputVault,
+                        vaultMint: sourceMint,
+                        vaultTokenProgram: TOKEN_PROGRAM_ID,
+                        systemProgram: SystemProgram.programId,
+                    })
+                    .signers([payer, provider.wallet.payer])
+                    .rpc();
+            }
+
+            if (!outputVaultAccountInfo) {
+                await program.methods
+                    .createVault()
+                    .accounts({
+                        vaultAuthority,
+                        payer: payer.publicKey,
+                        admin: provider.wallet.publicKey,
+                        vault: outputVault,
+                        vaultMint: destinationMint,
+                        vaultTokenProgram: TOKEN_PROGRAM_ID,
+                        systemProgram: SystemProgram.programId,
+                    })
+                    .signers([payer, provider.wallet.payer])
+                    .rpc();
+            }
+
 
             // Check if adapter_registry account exists
             const accountInfo = await provider.connection.getAccountInfo(adapterRegistry);
@@ -275,7 +303,7 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
     it("Initializes pool info for Raydium", async () => {
         try {
             const swapTypeBytes = getSwapTypeBytes({ raydium: {} });
-            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+            const [poolInfo, poolBump] = PublicKey.findProgramAddressSync(
                 [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
                 program.programId
             );
@@ -308,7 +336,7 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
     it("Initializes pool info for Whirlpool", async () => {
         try {
             const swapTypeBytes = getSwapTypeBytes({ whirlpool: { aToB: true } });
-            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+            const [poolInfo, poolBump] = PublicKey.findProgramAddressSync(
                 [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
                 program.programId
             );
@@ -342,7 +370,7 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
         try {
             // Initialize PoolInfo account
             const swapTypeBytes = getSwapTypeBytes({ whirlpool: { aToB: true } });
-            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+            const [poolInfo, poolBump] = PublicKey.findProgramAddressSync(
                 [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
                 program.programId
             );
@@ -428,7 +456,7 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
         try {
             // Initialize PoolInfo account
             const swapTypeBytes = getSwapTypeBytes({ raydium: {} });
-            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+            const [poolInfo, poolBump] = PublicKey.findProgramAddressSync(
                 [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
                 program.programId
             );
@@ -506,7 +534,7 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
         try {
             // Initialize PoolInfo account
             const swapTypeBytes = getSwapTypeBytes({ whirlpool: { aToB: true } });
-            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+            const [poolInfo, poolBump] = PublicKey.findProgramAddressSync(
                 [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
                 program.programId
             );
@@ -667,7 +695,7 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
         try {
             // Сначала инициализируем pool info
             const swapTypeBytes = getSwapTypeBytes({ raydium: {} });
-            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+            const [poolInfo, poolBump] = PublicKey.findProgramAddressSync(
                 [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
                 program.programId
             );
@@ -710,7 +738,7 @@ describe("Flipper Swap Protocol - Adapter Module", () => {
         try {
             // Инициализируем pool info
             const swapTypeBytes = getSwapTypeBytes({ raydium: {} });
-            const [poolInfo, poolBump] = await PublicKey.findProgramAddress(
+            const [poolInfo, poolBump] = PublicKey.findProgramAddressSync(
                 [Buffer.from("pool_info"), swapTypeBytes, poolAddress.toBuffer()],
                 program.programId
             );

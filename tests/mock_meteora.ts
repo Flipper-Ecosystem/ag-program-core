@@ -108,37 +108,37 @@ describe("mock-meteora-swap", () => {
         );
 
         // Derive lb_pair PDAs for each pool type
-        [lbPairTokenToToken] = await PublicKey.findProgramAddress(
+        [lbPairTokenToToken] = PublicKey.findProgramAddressSync(
             [Buffer.from("lb_pair"), tokenXMint.toBuffer(), tokenYMint.toBuffer()],
             program.programId
         );
-        [lbPairTokenTo2022] = await PublicKey.findProgramAddress(
+        [lbPairTokenTo2022] = PublicKey.findProgramAddressSync(
             [Buffer.from("lb_pair"), tokenXMint.toBuffer(), token2022YMint.toBuffer()],
             program.programId
         );
-        [lbPair2022To2022] = await PublicKey.findProgramAddress(
+        [lbPair2022To2022] = PublicKey.findProgramAddressSync(
             [Buffer.from("lb_pair"), token2022XMint.toBuffer(), token2022YMint.toBuffer()],
             program.programId
         );
-        [lbPair2022ToToken] = await PublicKey.findProgramAddress(
+        [lbPair2022ToToken] = PublicKey.findProgramAddressSync(
             [Buffer.from("lb_pair"), token2022XMint.toBuffer(), tokenYMint.toBuffer()],
             program.programId
         );
 
         // Derive oracle PDAs
-        [oracleTokenToToken] = await PublicKey.findProgramAddress(
+        [oracleTokenToToken] = PublicKey.findProgramAddressSync(
             [Buffer.from("oracle"), lbPairTokenToToken.toBuffer()],
             program.programId
         );
-        [oracleTokenTo2022] = await PublicKey.findProgramAddress(
+        [oracleTokenTo2022] = PublicKey.findProgramAddressSync(
             [Buffer.from("oracle"), lbPairTokenTo2022.toBuffer()],
             program.programId
         );
-        [oracle2022To2022] = await PublicKey.findProgramAddress(
+        [oracle2022To2022] = PublicKey.findProgramAddressSync(
             [Buffer.from("oracle"), lbPair2022To2022.toBuffer()],
             program.programId
         );
-        [oracle2022ToToken] = await PublicKey.findProgramAddress(
+        [oracle2022ToToken] = PublicKey.findProgramAddressSync(
             [Buffer.from("oracle"), lbPair2022ToToken.toBuffer()],
             program.programId
         );
@@ -374,7 +374,7 @@ describe("mock-meteora-swap", () => {
                 tokenXProgram,
                 tokenYProgram,
                 memoProgram: Keypair.generate().publicKey,
-                eventAuthority: (await PublicKey.findProgramAddress(
+                eventAuthority: (PublicKey.findProgramAddressSync(
                     [Buffer.from("__event_authority")],
                     program.programId
                 ))[0],
@@ -594,7 +594,7 @@ describe("mock-meteora-swap", () => {
                     tokenXProgram: TOKEN_PROGRAM_ID,
                     tokenYProgram: TOKEN_PROGRAM_ID,
                     memoProgram: Keypair.generate().publicKey,
-                    eventAuthority: (await PublicKey.findProgramAddress(
+                    eventAuthority: (PublicKey.findProgramAddressSync(
                         [Buffer.from("__event_authority")],
                         program.programId
                     ))[0],

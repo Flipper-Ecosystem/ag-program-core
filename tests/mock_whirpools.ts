@@ -91,19 +91,19 @@ describe("mock-whirlpool-swap", () => {
         );
 
         // Derive whirlpool PDAs for each pool
-        [whirlpoolTokenToToken] = await PublicKey.findProgramAddress(
+        [whirlpoolTokenToToken] = PublicKey.findProgramAddressSync(
             [Buffer.from("whirlpool"), tokenAMint.toBuffer(), tokenBMint.toBuffer()],
             program.programId
         );
-        [whirlpoolTokenTo2022] = await PublicKey.findProgramAddress(
+        [whirlpoolTokenTo2022] = PublicKey.findProgramAddressSync(
             [Buffer.from("whirlpool"), tokenAMint.toBuffer(), token2022BMint.toBuffer()],
             program.programId
         );
-        [whirlpool2022To2022] = await PublicKey.findProgramAddress(
+        [whirlpool2022To2022] = PublicKey.findProgramAddressSync(
             [Buffer.from("whirlpool"), token2022AMint.toBuffer(), token2022BMint.toBuffer()],
             program.programId
         );
-        [whirlpool2022ToToken] = await PublicKey.findProgramAddress(
+        [whirlpool2022ToToken] = PublicKey.findProgramAddressSync(
             [Buffer.from("whirlpool"), token2022AMint.toBuffer(), tokenBMint.toBuffer()],
             program.programId
         );

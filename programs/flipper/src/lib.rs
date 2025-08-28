@@ -64,8 +64,28 @@ pub mod flipper {
     }
 
 
+    pub fn create_vault_authority(ctx: Context<CreateVaultAuthority>) -> Result<()> {
+        instructions::create_vault_authority(ctx)
+    }
+
+    pub fn create_vault(ctx: Context<CreateVault>) -> Result<()> {
+        instructions::create_vault(ctx)
+    }
+
+    pub fn close_vault(ctx: Context<CloseVault>) -> Result<()> {
+        instructions::close_vault(ctx)
+    }
+
     pub fn initialize_vaults(ctx: Context<InitializeVaults>) -> Result<()> {
         instructions::initialize_vaults(ctx)
+    }
+
+    pub fn change_vault_authority_admin(ctx: Context<ChangeVaultAuthorityAdmin>) -> Result<()> {
+        instructions::change_vault_authority_admin(ctx)
+    }
+
+    pub fn withdraw_platform_fees(ctx: Context<WithdrawPlatformFees>, amount: u64) -> Result<()> {
+        instructions::withdraw_platform_fees(ctx, amount)
     }
 
     pub fn route<'info>(

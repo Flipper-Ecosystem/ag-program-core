@@ -102,38 +102,38 @@ describe("mock-raydium-swap", () => {
         );
 
         // Derive pool state and authority PDAs for each pool
-        [poolStateTokenToToken] = await PublicKey.findProgramAddress(
+        [poolStateTokenToToken] = PublicKey.findProgramAddressSync(
             [Buffer.from("pool_state"), tokenAMint.toBuffer(), tokenBMint.toBuffer()],
             program.programId
         );
-        [authorityTokenToToken] = await PublicKey.findProgramAddress(
+        [authorityTokenToToken] = PublicKey.findProgramAddressSync(
             [Buffer.from("authority"), poolStateTokenToToken.toBuffer()],
             program.programId
         );
 
-        [poolStateTokenTo2022] = await PublicKey.findProgramAddress(
+        [poolStateTokenTo2022] = PublicKey.findProgramAddressSync(
             [Buffer.from("pool_state"), tokenAMint.toBuffer(), token2022BMint.toBuffer()],
             program.programId
         );
-        [authorityTokenTo2022] = await PublicKey.findProgramAddress(
+        [authorityTokenTo2022] = PublicKey.findProgramAddressSync(
             [Buffer.from("authority"), poolStateTokenTo2022.toBuffer()],
             program.programId
         );
 
-        [poolState2022To2022] = await PublicKey.findProgramAddress(
+        [poolState2022To2022] = PublicKey.findProgramAddressSync(
             [Buffer.from("pool_state"), token2022AMint.toBuffer(), token2022BMint.toBuffer()],
             program.programId
         );
-        [authority2022To2022] = await PublicKey.findProgramAddress(
+        [authority2022To2022] = PublicKey.findProgramAddressSync(
             [Buffer.from("authority"), poolState2022To2022.toBuffer()],
             program.programId
         );
 
-        [poolState2022ToToken] = await PublicKey.findProgramAddress(
+        [poolState2022ToToken] = PublicKey.findProgramAddressSync(
             [Buffer.from("pool_state"), token2022AMint.toBuffer(), tokenBMint.toBuffer()],
             program.programId
         );
-        [authority2022ToToken] = await PublicKey.findProgramAddress(
+        [authority2022ToToken] = PublicKey.findProgramAddressSync(
             [Buffer.from("authority"), poolState2022ToToken.toBuffer()],
             program.programId
         );
