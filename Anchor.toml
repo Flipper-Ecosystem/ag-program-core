@@ -7,6 +7,9 @@ skip-lint = false
 
 [programs.localnet]
 flipper = "5958qddzZjU34CHUD4bisVBiYgDQ6EREwBLgpbVaSLX7"
+mock-raydium = "FmQ6x78hRZyXJcofk7NSHx9tvPEtEonjsMdAX6FQw7wm"
+mock_meteora = "699YWVLRa4T5Mxs3iNJGnpwP24JNckt25vW1pEMc5xrA"
+mock_whirlpools = "Fa6sgRmBda2UJpBT1tV3bq27JkLjuRYvnt6TxWqAJT5F"
 
 [registry]
 url = "https://api.apr.dev"

@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{TokenAccount};
+use anchor_spl::token_interface::{TokenAccount, TokenInterface};
 use crate::adapters::adapter_connector_module::{AdapterContext, get_adapter};
 use crate::errors::ErrorCode;
 use crate::state::*;
@@ -57,12 +57,17 @@ pub fn validate_route<'info>(
         return Err(ErrorCode::NotEnoughAccountKeys.into());
     }
 
-    // Validate input vault
+    // Validate input vault using token_interface
     let input_vault = remaining_accounts
         .iter()
         .find(|acc| {
-            if let Ok(token_account) = TokenAccount::try_deserialize(&mut acc.data.borrow().as_ref()) {
-                token_account.mint == source_mint.key()
+            // Try to deserialize as TokenAccount using interface
+            if let Ok(account_data) = acc.try_borrow_data() {
+                if let Ok(token_account) = TokenAccount::try_deserialize(&mut account_data.as_ref()) {
+                    token_account.mint == source_mint.key()
+                } else {
+                    false
+                }
             } else {
                 false
             }
@@ -138,7 +143,8 @@ pub fn validate_route<'info>(
 
         // Validate multi-hop: ensure input mint matches previous output mint
         if is_multi_hop && i > 0 {
-            let input_vault_data = TokenAccount::try_deserialize(&mut input_vault_account.data.borrow().as_ref())?;
+            let account_data = input_vault_account.try_borrow_data()?;
+            let input_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
             let prev_output_mint = output_mints[i - 1];
             if input_vault_data.mint != prev_output_mint {
                 return Err(ErrorCode::InvalidMultiHopRoute.into());
@@ -149,7 +155,8 @@ pub fn validate_route<'info>(
         let output_mint = if i == route_plan.len() - 1 {
             destination_mint.key()
         } else {
-            let output_vault_data = TokenAccount::try_deserialize(&mut output_account_info.data.borrow().as_ref())?;
+            let account_data = output_account_info.try_borrow_data()?;
+            let output_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
             output_vault_data.mint
         };
         output_mints.push(output_mint);
@@ -159,17 +166,13 @@ pub fn validate_route<'info>(
             current_amount = step_amount; // Simulate passing amount to next step
         }
 
-        // Validate that at least one step produces destination_mint
-        if output_mint == destination_mint.key() {
-            // Track that we have at least one valid output
-        }
-
         // Validate adapter and pool
         if !adapter_registry.is_supported_adapter(&step.swap) {
             return Err(ErrorCode::SwapNotSupported.into());
         }
 
-        let input_vault_data = TokenAccount::try_deserialize(&mut input_vault_account.data.borrow().as_ref())?;
+        let account_data = input_vault_account.try_borrow_data()?;
+        let input_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
         if i == 0 && input_vault_data.mint != source_mint.key() {
             return Err(ErrorCode::InvalidMint.into());
         }
