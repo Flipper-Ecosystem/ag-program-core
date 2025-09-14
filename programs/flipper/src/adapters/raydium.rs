@@ -2,7 +2,8 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_spl::token::{Token, TokenAccount};
-use crate::adapters::{AdapterContext, DexAdapter};
+use crate::adapters::adapter_connector_module::{AdapterContext};
+use crate::adapters::dex_adapter::DexAdapter;
 use crate::errors::ErrorCode;
 use crate::state::{Swap, SwapEvent, SwapResult, PoolInfo};
 
@@ -111,12 +112,23 @@ impl DexAdapter for RaydiumAdapter {
             data: instruction_data,
         };
 
-        // Execute CPI call with proper signer seeds
+        // Find PDA for vault authority with proper seed derivation
         let (vault_authority_pda, vault_authority_bump) = Pubkey::find_program_address(
             &[b"vault_authority"],
             &ctx.program_id,
         );
 
+        // Verify that ctx.authority matches our calculated PDA
+        if ctx.authority.key() != vault_authority_pda {
+            return Err(ErrorCode::InvalidAccount.into());
+        }
+
+        let vault_authority_bump = Pubkey::find_program_address(
+            &[b"vault_authority"],
+            &ctx.program_id,
+        ).1;
+
+        // Prepare signer seeds for CPI call
         let authority_seeds: &[&[u8]] = &[b"vault_authority", &[vault_authority_bump]];
         let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
 

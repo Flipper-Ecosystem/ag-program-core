@@ -65,5 +65,23 @@ pub enum ErrorCode {
     #[msg("Pool disabled")]
     PoolDisabled = 6049,
     #[msg("Invalid token program for mint")]
-    InvalidTokenProgram = 6050
+    InvalidTokenProgram = 6050,
+    #[msg("Invalid platform fee owner")]
+    InvalidPlatformFeeOwner = 6051,
+    #[msg("Invalid platform fee mint")]
+    InvalidPlatformFeeMint = 6052,
+    #[msg("Invalid amount")]
+    InvalidAmount = 6053,
+    #[msg("Invalid percent")]
+    InvalidPercent = 6054,
+    #[msg("Invalid account index")]
+    InvalidAccountIndex = 6055,
+    #[msg("Invalid multi hop route")]
+    InvalidMultiHopRoute = 6056,
+    #[msg("Invalid partial swap percent")]
+    InvalidPartialSwapPercent = 6057,
+    #[msg("Insufficient dexes partially swap")]
+    InsufficientDexesForPartialSwap = 6058,
+    #[msg("No ouput produced")]
+    NoOutputProduced = 6059
 }
