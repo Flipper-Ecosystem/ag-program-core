@@ -25,6 +25,25 @@ pub fn validate_mint_program_compatibility(mint_account: &AccountInfo, token_pro
     Ok(())
 }
 
+/// Calculate the remaining accounts range for a specific step
+fn calculate_adapter_accounts_range(
+    step: &RoutePlanStep,
+    route_plan: &[RoutePlanStep],
+    step_index: usize
+) -> (usize, usize) {
+    let start_index = step.input_index as usize + 1;
+
+    let end_index = if step_index == route_plan.len() - 1 {
+   
+        step.output_index as usize
+    } else {
+        step.output_index as usize + 1
+    };
+
+    let count = end_index.saturating_sub(start_index);
+    (start_index, count)
+}
+
 /// Validates the route plan and associated accounts
 pub fn validate_route<'info>(
     adapter_registry: &Account<'info, AdapterRegistry>,
@@ -50,12 +69,6 @@ pub fn validate_route<'info>(
     // Validate mint compatibility with token programs
     validate_mint_program_compatibility(source_mint, input_token_program)?;
     validate_mint_program_compatibility(destination_mint, output_token_program)?;
-
-    // Validate number of remaining accounts
-    let required_accounts = route_plan.len() * 3;
-    if remaining_accounts.len() < required_accounts {
-        return Err(ErrorCode::NotEnoughAccountKeys.into());
-    }
 
     // Validate input vault using token_interface
     let input_vault = remaining_accounts
@@ -84,13 +97,19 @@ pub fn validate_route<'info>(
 
     for i in 0..route_plan.len() {
         let step = &route_plan[i];
+
         // Validate percent is non-zero and within bounds
         if step.percent == 0 || step.percent > 100 {
             return Err(ErrorCode::InvalidPercent.into());
         }
 
         // Validate account indices
-        if step.input_index as usize >= remaining_accounts.len() || step.output_index as usize >= remaining_accounts.len() {
+        if step.input_index as usize >= remaining_accounts.len() {
+            return Err(ErrorCode::InvalidAccountIndex.into());
+        }
+
+        // Validate output_index for non-final steps
+        if i < route_plan.len() - 1 && step.output_index as usize >= remaining_accounts.len() {
             return Err(ErrorCode::InvalidAccountIndex.into());
         }
 
@@ -190,8 +209,18 @@ pub fn validate_route<'info>(
             return Err(ErrorCode::InvalidPoolAddress.into());
         }
 
-        // Validate adapter accounts
+        // Calculate correct range for adapter accounts
+        let (adapter_start_index, adapter_end_index) = calculate_adapter_accounts_range(step, route_plan, i);
+
+        // Ensure we have enough accounts for this adapter
+        if remaining_accounts.len() < adapter_end_index {
+            return Err(ErrorCode::NotEnoughAccountKeys.into());
+        }
+
+        // Validate adapter accounts with correct range
         let adapter = get_adapter(&step.swap, adapter_registry)?;
+        let (adapter_start_index, adapter_accounts_count) = calculate_adapter_accounts_range(step, route_plan, i);
+
         let adapter_ctx = AdapterContext {
             token_program: input_token_program.clone(),
             authority: vault_authority.clone(),
@@ -201,7 +230,8 @@ pub fn validate_route<'info>(
             program_id: *program_id,
         };
 
-        adapter.validate_accounts(adapter_ctx, step.input_index as usize + 1)?;
+        // Use both start index and count for adapter validation
+        adapter.validate_accounts(adapter_ctx, adapter_start_index, adapter_accounts_count)?;
     }
 
     // Validate partial swap: ensure multiple DEXes and same input vault

@@ -16,7 +16,6 @@ pub struct MeteoraAdapter {
 const TOKEN_PROGRAM_ID: Pubkey = anchor_spl::token::ID;
 const TOKEN_2022_PROGRAM_ID: Pubkey = anchor_spl::token_2022::ID;
 
-
 /// Meteora swap2 instruction discriminator
 /// This is the first 8 bytes of the sha256 hash of "global:swap2"
 const SWAP2_DISCRIMINATOR: [u8; 8] = [65, 75, 63, 76, 235, 91, 91, 136];
@@ -55,16 +54,22 @@ impl DexAdapter for MeteoraAdapter {
         ctx: AdapterContext,
         amount: u64,
         remaining_accounts_start_index: usize,
+        remaining_accounts_count: usize,
     ) -> Result<SwapResult> {
         msg!("Executing Meteora swap2, amount: {}", amount);
 
-        // Ensure we have at least 16 required accounts for swap2
-        if ctx.remaining_accounts.len() < remaining_accounts_start_index + 16 {
+        // Ensure minimum required accounts are present
+        if remaining_accounts_count < 16 {
             return Err(ErrorCode::NotEnoughAccountKeys.into());
         }
 
-        // Get slice of remaining accounts starting from our index for efficient access
-        let remaining_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..];
+        // Get adapter-specific slice of remaining accounts
+        let end_index = remaining_accounts_start_index + remaining_accounts_count;
+        if ctx.remaining_accounts.len() < end_index {
+            return Err(ErrorCode::NotEnoughAccountKeys.into());
+        }
+
+        let remaining_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..end_index];
 
         // Validate pool is enabled
         let pool_info = Account::<PoolInfo>::try_from(&remaining_accounts[0])?;
@@ -73,7 +78,7 @@ impl DexAdapter for MeteoraAdapter {
         }
 
         // Calculate number of bin arrays available (maximum 10 for Meteora)
-        let bin_arrays_count = (remaining_accounts.len() - 16).min(10) as u8;
+        let bin_arrays_count = (remaining_accounts_count - 16).min(10) as u8;
 
         // Record initial output token balance for calculating swap result
         let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
@@ -193,14 +198,20 @@ impl DexAdapter for MeteoraAdapter {
         &self,
         ctx: AdapterContext,
         remaining_accounts_start_index: usize,
+        remaining_accounts_count: usize,
     ) -> Result<()> {
         // Ensure minimum required accounts are present
-        if ctx.remaining_accounts.len() < remaining_accounts_start_index + 16 {
+        if remaining_accounts_count < 16 {
             return Err(ErrorCode::NotEnoughAccountKeys.into());
         }
 
-        // Get efficient slice access
-        let remaining_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..];
+        // Get adapter-specific slice of remaining accounts
+        let end_index = remaining_accounts_start_index + remaining_accounts_count;
+        if ctx.remaining_accounts.len() < end_index {
+            return Err(ErrorCode::NotEnoughAccountKeys.into());
+        }
+
+        let remaining_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..end_index];
 
         // Validate pool is enabled and matches expected address
         let pool_info = Account::<PoolInfo>::try_from(&remaining_accounts[0])?;

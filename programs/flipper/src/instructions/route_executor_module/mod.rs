@@ -14,19 +14,27 @@ pub struct SwapEventData {
     pub output_amount: u64,
 }
 
+/// Calculate the remaining accounts range for a specific step
+fn calculate_adapter_accounts_range(
+    step: &RoutePlanStep,
+    route_plan: &[RoutePlanStep],
+    step_index: usize
+) -> (usize, usize) {
+    let start_index = step.input_index as usize + 1; // Skip input vault itself
+
+    let end_index = if step_index == route_plan.len() - 1 {
+        // For last step: use output_index (excluding user destination account)
+        step.output_index as usize
+    } else {
+        // For intermediate steps: use output_index + 1 (including output vault)
+        step.output_index as usize + 1
+    };
+
+    let count = end_index.saturating_sub(start_index);
+    (start_index, count)
+}
+
 /// Executes a route plan, handling partial swaps, multi-hop swaps, and partial multi-hop swaps
-/// # Arguments
-/// * `adapter_registry` - The adapter registry containing supported adapters
-/// * `input_token_program` - The token program for transfers
-/// * `vault_authority` - The authority for the vault accounts
-/// * `source_mint` - The mint of the input token
-/// * `user_destination_token_account` - The user's destination token account
-/// * `route_plan` - Array of route plan steps
-/// * `remaining_accounts` - Additional accounts required for swaps
-/// * `program_id` - The program ID of this program
-/// * `in_amount` - The total input amount for the route
-/// # Returns
-/// * `Result<(u64, Vec<SwapEventData>)>` - The final output amount and swap event data
 pub fn execute_route<'info>(
     adapter_registry: &Account<'info, AdapterRegistry>,
     input_token_program: &AccountInfo<'info>,
@@ -77,8 +85,11 @@ pub fn execute_route<'info>(
             program_id: *program_id,
         };
 
-        // Execute the swap
-        let swap_result = adapter.execute_swap(adapter_ctx, step_amount, step.input_index as usize + 1)?;
+        // Calculate correct start index and count for adapter
+        let (adapter_start_index, adapter_accounts_count) = calculate_adapter_accounts_range(step, route_plan, i);
+
+        // Execute the swap with correct range
+        let swap_result = adapter.execute_swap(adapter_ctx, step_amount, adapter_start_index, adapter_accounts_count)?;
 
         // Determine output mint
         let output_mint = if i != route_plan.len() - 1 {
