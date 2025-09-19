@@ -7,6 +7,7 @@ pub mod vault_manager_module;
 pub mod route_validator_module;
 
 pub mod route_executor_module;
+mod limit_orders_module;
 
 pub use adapter_registry_module::*;
 pub use swap_processor_module::*;
