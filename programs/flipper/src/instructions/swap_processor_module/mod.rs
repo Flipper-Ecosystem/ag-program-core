@@ -47,12 +47,13 @@ pub struct Route<'info> {
     )]
     pub user_destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    
+
     pub source_mint: InterfaceAccount<'info, Mint>,
     pub destination_mint: InterfaceAccount<'info, Mint>,
 
     #[account(mut)]
-    pub platform_fee_account: Option<InterfaceAccount<'info, TokenAccount>>
+    pub platform_fee_account: Option<InterfaceAccount<'info, TokenAccount>>,
+    pub system_program: Program<'info, System>
 }
 
 pub fn route<'info>(
@@ -114,6 +115,23 @@ pub fn route<'info>(
         })
         .ok_or(ErrorCode::VaultNotFound)?;
 
+    // Find destination vault
+    let destination_vault = ctx.remaining_accounts
+        .iter()
+        .rev()
+        .find(|acc| {
+            if let Ok(account_data) = acc.try_borrow_data() {
+                if let Ok(token_account) = TokenAccount::try_deserialize(&mut account_data.as_ref()) {
+                    token_account.mint == ctx.accounts.destination_mint.key()
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        })
+        .ok_or(ErrorCode::VaultNotFound)?;
+
     // Transfer initial funds from user to input vault using input token program
     transfer_checked(
         CpiContext::new(
@@ -129,13 +147,13 @@ pub fn route<'info>(
         ctx.accounts.source_mint.decimals,
     )?;
 
-    // Execute the route and collect event data
+    // Execute the route - now using destination_vault instead of user account
     let (mut output_amount, event_data) = route_executor_module::execute_route(
         &ctx.accounts.adapter_registry,
         &ctx.accounts.input_token_program.to_account_info(),
         &ctx.accounts.vault_authority.to_account_info(),
         &ctx.accounts.source_mint.to_account_info(),
-        &ctx.accounts.user_destination_token_account.to_account_info(),
+        destination_vault, // Changed: use vault instead of user account
         &route_plan,
         ctx.remaining_accounts,
         ctx.program_id,
@@ -157,22 +175,6 @@ pub fn route<'info>(
     if let Some(platform_fee_account) = &ctx.accounts.platform_fee_account {
         let fee_amount = (output_amount as u128 * platform_fee_bps as u128 / 10_000) as u64;
         if fee_amount > 0 {
-            // Find destination vault
-            let destination_vault = ctx.remaining_accounts
-                .iter()
-                .find(|acc| {
-                    if let Ok(account_data) = acc.try_borrow_data() {
-                        if let Ok(token_account) = TokenAccount::try_deserialize(&mut account_data.as_ref()) {
-                            token_account.mint == ctx.accounts.destination_mint.key()
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                })
-                .ok_or(ErrorCode::VaultNotFound)?;
-
             // Transfer fee using output token program
             transfer_checked(
                 CpiContext::new_with_signer(
@@ -204,6 +206,22 @@ pub fn route<'info>(
     if output_amount < quoted_out_amount * (10_000 - slippage_bps as u64) / 10_000 {
         return Err(ErrorCode::SlippageToleranceExceeded.into());
     }
+
+    // Transfer final amount from destination vault to user
+    transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.output_token_program.to_account_info(),
+            TransferChecked {
+                from: destination_vault.clone(),
+                to: ctx.accounts.user_destination_token_account.to_account_info(),
+                authority: ctx.accounts.vault_authority.to_account_info(),
+                mint: ctx.accounts.destination_mint.to_account_info(),
+            },
+            signer_seeds
+        ),
+        output_amount,
+        ctx.accounts.destination_mint.decimals,
+    )?;
 
     Ok(output_amount)
 }

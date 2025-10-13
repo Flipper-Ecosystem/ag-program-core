@@ -7,7 +7,7 @@ use anchor_spl::{
 declare_id!("FmQ6x78hRZyXJcofk7NSHx9tvPEtEonjsMdAX6FQw7wm");
 
 #[program]
-pub mod mock_raydium_swap {
+pub mod mock_raydium {
     use super::*;
 
     pub fn initialize_pool(
@@ -88,6 +88,10 @@ pub mod mock_raydium_swap {
         amount_in: u64,
         minimum_amount_out: u64,
     ) -> Result<()> {
+
+
+        msg!("call mock program");
+
         // Validate mints are owned by the provided token programs
         require!(
             ctx.accounts.input_token_mint.to_account_info().owner == &ctx.accounts.input_token_program.key(),
@@ -100,7 +104,6 @@ pub mod mock_raydium_swap {
 
         // Validate input amounts
         require!(amount_in > 0, ErrorCode::ZeroAmount);
-        require!(minimum_amount_out > 0, ErrorCode::ZeroAmount);
 
         // Load pool state
         let pool_state = &mut ctx.accounts.pool_state;
@@ -145,8 +148,7 @@ pub mod mock_raydium_swap {
 
         // Transfer output tokens from vault to user
         let authority_seeds = &[
-            b"authority".as_ref(),
-            ctx.accounts.pool_state.to_account_info().key.as_ref(),
+            b"vault_and_lp_mint_auth_seed".as_ref(),
             &[ctx.bumps.authority],
         ];
         transfer_checked(
@@ -183,7 +185,7 @@ pub struct InitializePool<'info> {
     pub pool_state: Account<'info, PoolState>,
 
     #[account(
-        seeds = [b"authority", pool_state.key().as_ref()],
+        seeds = [b"vault_and_lp_mint_auth_seed"],
         bump,
     )]
     /// CHECK: PDA authority for vaults, verified by seeds
@@ -271,11 +273,10 @@ pub struct InitializeUserTokenAccounts<'info> {
 
 #[derive(Accounts)]
 pub struct Swap<'info> {
-    #[account(mut)]
     pub payer: Signer<'info>,
 
     #[account(
-        seeds = [b"authority", pool_state.key().as_ref()],
+        seeds = [b"vault_and_lp_mint_auth_seed"],
         bump,
     )]
     /// CHECK: PDA authority for vaults, verified by seeds
@@ -284,29 +285,13 @@ pub struct Swap<'info> {
     /// CHECK: AMM config
     pub amm_config: UncheckedAccount<'info>,
 
-    #[account(
-        mut,
-        seeds = [b"pool_state", input_token_mint.key().as_ref(), output_token_mint.key().as_ref()],
-        bump,
-        has_one = token_a_vault,
-        has_one = token_b_vault,
-    )]
+    #[account(mut)]
     pub pool_state: Box<Account<'info, PoolState>>,
 
-    #[account(
-        mut,
-        associated_token::mint = input_token_mint,
-        associated_token::authority = payer,
-        associated_token::token_program = input_token_program,
-    )]
+    #[account(mut)]
     pub input_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    #[account(
-        mut,
-        associated_token::mint = output_token_mint,
-        associated_token::authority = payer,
-        associated_token::token_program = output_token_program,
-    )]
+    #[account(mut)]
     pub output_token_account: InterfaceAccount<'info, TokenAccount>,
 
     #[account(

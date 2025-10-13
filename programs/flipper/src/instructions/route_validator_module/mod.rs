@@ -114,11 +114,7 @@ pub fn validate_route<'info>(
         }
 
         let input_vault_account = &remaining_accounts[step.input_index as usize];
-        let output_account_info = if i == route_plan.len() - 1 {
-            destination_mint.clone()
-        } else {
-            remaining_accounts[step.output_index as usize].clone()
-        };
+        let output_account_info = remaining_accounts[step.output_index as usize].clone();
 
         // Check step amount
         let step_amount = if step.percent == 100 {
@@ -200,12 +196,6 @@ pub fn validate_route<'info>(
         let pool_info_account = &remaining_accounts[step.input_index as usize + 1];
         let pool_info = Account::<PoolInfo>::try_from(pool_info_account)?;
         if pool_info.adapter_swap_type != step.swap || !pool_info.enabled {
-            return Err(ErrorCode::InvalidPoolAddress.into());
-        }
-
-        // Validate pool address matches
-        let pool_account = &remaining_accounts[step.input_index as usize + 2];
-        if pool_account.key() != pool_info.pool_address {
             return Err(ErrorCode::InvalidPoolAddress.into());
         }
 

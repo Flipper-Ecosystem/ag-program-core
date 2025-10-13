@@ -40,7 +40,7 @@ pub fn execute_route<'info>(
     input_token_program: &AccountInfo<'info>,
     vault_authority: &AccountInfo<'info>,
     source_mint: &AccountInfo<'info>,
-    user_destination_token_account: &AccountInfo<'info>,
+    destination_vault: &AccountInfo<'info>, // Changed parameter name
     route_plan: &[RoutePlanStep],
     remaining_accounts: &'info [AccountInfo<'info>],
     program_id: &Pubkey,
@@ -49,7 +49,12 @@ pub fn execute_route<'info>(
     let mut current_amount = in_amount;
     let mut total_output_amount: u64 = 0;
     let mut event_data: Vec<SwapEventData> = Vec::new();
-    let destination_mint = user_destination_token_account.key();
+
+    // Get destination mint from vault
+    let account_data = destination_vault.try_borrow_data()?;
+    let destination_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
+    let destination_mint = destination_vault_data.mint;
+    drop(account_data); // Release borrow
 
     // Process each step in the route plan
     for (i, step) in route_plan.iter().enumerate() {
@@ -61,11 +66,9 @@ pub fn execute_route<'info>(
         };
 
         let input_vault_account = &remaining_accounts[step.input_index as usize];
-        let output_account_info = if i == route_plan.len() - 1 {
-            user_destination_token_account.clone()
-        } else {
-            remaining_accounts[step.output_index as usize].clone()
-        };
+
+        // Always use vault for output (either intermediate or destination)
+        let output_account_info = remaining_accounts[step.output_index as usize].clone();
 
         // Get adapter
         let adapter = get_adapter(&step.swap, adapter_registry)?;
@@ -92,13 +95,10 @@ pub fn execute_route<'info>(
         let swap_result = adapter.execute_swap(adapter_ctx, step_amount, adapter_start_index, adapter_accounts_count)?;
 
         // Determine output mint
-        let output_mint = if i != route_plan.len() - 1 {
-            let account_data = output_account_info.try_borrow_data()?;
-            let output_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
-            output_vault_data.mint
-        } else {
-            user_destination_token_account.key()
-        };
+        let account_data = output_account_info.try_borrow_data()?;
+        let output_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
+        let output_mint = output_vault_data.mint;
+        drop(account_data);
 
         // Update amounts: accumulate only if output mint matches destination_mint
         if output_mint == destination_mint {
