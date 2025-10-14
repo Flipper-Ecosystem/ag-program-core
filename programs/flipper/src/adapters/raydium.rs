@@ -155,7 +155,7 @@ impl DexAdapter for RaydiumAdapter {
             return Err(ErrorCode::NotEnoughAccountKeys.into());
         }
 
-        let adapter_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..=end_index];
+        let adapter_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..end_index];
 
         // Validate pool is enabled (pool_info is at index 0)
         let pool_info = Account::<PoolInfo>::try_from(&adapter_accounts[0])?;

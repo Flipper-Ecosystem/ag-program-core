@@ -329,7 +329,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
         const slippageBps = 100;
         const platformFeeBps = 0;
 
-        const routePlan = [{ swap: { raydium: {} }, percent: 100, inputIndex: 0, outputIndex: 12 }];
+        const routePlan = [{ swap: { raydium: {} }, percent: 100, inputIndex: 0, outputIndex: 13 }];
 
 
         const inputPoolVault = sourceMint.toString() < destinationMint.toString() ? raydiumTokenAVault : raydiumTokenBVault;
@@ -349,8 +349,8 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             { pubkey: sourceMint, isWritable: false, isSigner: false }, // index 9
             { pubkey: destinationMint, isWritable: false, isSigner: false }, // index 10
             { pubkey: raydiumObservationState, isWritable: true, isSigner: false }, // index 11
-            { pubkey: outputVault, isWritable: true, isSigner: false }, // index 12: output vault
-            { pubkey: mockRaydiumProgramId, isWritable: false, isSigner: false }, // index 13:  program id
+            { pubkey: mockRaydiumProgramId, isWritable: false, isSigner: false }, // index 12:  program id
+            { pubkey: outputVault, isWritable: true, isSigner: false }, // index 13: output vault
         ];
 
         const initialSource = (await getAccount(provider.connection, userSourceTokenAccount)).amount;

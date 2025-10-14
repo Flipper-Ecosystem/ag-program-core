@@ -222,6 +222,12 @@ pub fn validate_route<'info>(
             program_id: *program_id,
         };
 
+        let program_index = adapter_end_index - 1;
+        let program_account = &remaining_accounts[program_index];
+
+        // validate program id
+        adapter.validate_cpi(program_account.key)?;
+
         // Use both start index and count for adapter validation
         adapter.validate_accounts(adapter_ctx, adapter_start_index, adapter_accounts_count)?;
     }
