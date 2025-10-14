@@ -5,6 +5,12 @@ package_manager = "yarn"
 resolution = true
 skip-lint = false
 
+
+[programs.devnet]
+flipper = "5958qddzZjU34CHUD4bisVBiYgDQ6EREwBLgpbVaSLX7"
+mock_raydium = "FmQ6x78hRZyXJcofk7NSHx9tvPEtEonjsMdAX6FQw7wm"
+
+
 [programs.localnet]
 flipper = "5958qddzZjU34CHUD4bisVBiYgDQ6EREwBLgpbVaSLX7"
 mock_raydium = "FmQ6x78hRZyXJcofk7NSHx9tvPEtEonjsMdAX6FQw7wm"

@@ -11,8 +11,8 @@ import {
     getAccount,
     getOrCreateAssociatedTokenAccount
 } from "@solana/spl-token";
-import FLIPPER_IDL from "../target/idl/flipper.json";
-import MOCK_RAYDIUM_IDL from "../target/idl/mock_raydium.json";
+import FLIPPER_IDL from "../../target/idl/flipper.json";
+import MOCK_RAYDIUM_IDL from "../../target/idl/mock_raydium.json";
 import fs from "fs";
 
 // Function to load or generate a keypair for the wallet
@@ -27,7 +27,7 @@ const loadKeypair = (): Keypair => {
 };
 
 // Configure connection to Solana Localnet
-const connection = new Connection("http://127.0.0.1:8899", "confirmed");
+const connection = new Connection("https://api.devnet.solana.com", "confirmed");
 
 // Create wallet and provider for Anchor
 const wallet = new anchor.Wallet(loadKeypair());
@@ -93,12 +93,52 @@ async function setupProgram() {
         console.log("   User:", user.publicKey.toBase58());
         console.log("   Treasury:", treasury.publicKey.toBase58(), "\n");
 
-        // Fund user and treasury
-        console.log("💰 Requesting airdrops...");
-        await connection.requestAirdrop(user.publicKey, 10_000_000_000);
-        await connection.requestAirdrop(treasury.publicKey, 10_000_000_000);
-        await waitForConfirmation();
-        console.log("✅ Airdrops completed\n");
+
+        // ✅ ДОБАВЬТЕ ЭТО: Проверка баланса admin
+        const adminBalance = await connection.getBalance(admin.publicKey);
+        console.log("💰 Admin balance:", adminBalance / 1e9, "SOL");
+
+        if (adminBalance < 3_000_000_000) { // Минимум 3 SOL
+            console.error("❌ Insufficient admin balance. Need at least 3 SOL");
+            console.log("   Run: solana airdrop 5 --url devnet");
+            process.exit(1);
+        }
+
+        // ✅ ДОБАВЬТЕ ЭТО: Перевод SOL на user и treasury
+        console.log("\n💸 Transferring SOL to user and treasury...");
+
+        // Перевод 1 SOL на user
+        const transferToUserTx = new Transaction().add(
+            SystemProgram.transfer({
+                fromPubkey: admin.publicKey,
+                toPubkey: user.publicKey,
+                lamports: 1_000_000_000, // 1 SOL
+            })
+        );
+        await provider.sendAndConfirm(transferToUserTx, [wallet.payer]);
+        console.log("✅ Transferred 1 SOL to user");
+
+        await waitForConfirmation(2000);
+
+        // Перевод 0.5 SOL на treasury
+        const transferToTreasuryTx = new Transaction().add(
+            SystemProgram.transfer({
+                fromPubkey: admin.publicKey,
+                toPubkey: treasury.publicKey,
+                lamports: 500_000_000, // 0.5 SOL
+            })
+        );
+        await provider.sendAndConfirm(transferToTreasuryTx, [wallet.payer]);
+        console.log("✅ Transferred 0.5 SOL to treasury");
+
+        await waitForConfirmation(2000);
+
+        // Проверка балансов
+        const userBalance = await connection.getBalance(user.publicKey);
+        const treasuryBalance = await connection.getBalance(treasury.publicKey);
+        console.log(`   User balance: ${userBalance / 1e9} SOL`);
+        console.log(`   Treasury balance: ${treasuryBalance / 1e9} SOL\n`);
+
 
         // Derive PDAs
         [vaultAuthority, vaultAuthorityBump] = PublicKey.findProgramAddressSync(
@@ -106,17 +146,6 @@ async function setupProgram() {
             flipperProgram.programId
         );
 
-        // Fund vault_authority with SOL
-        console.log("💸 Funding vault authority...");
-        const fundTx = new Transaction().add(
-            SystemProgram.transfer({
-                fromPubkey: wallet.payer.publicKey,
-                toPubkey: vaultAuthority,
-                lamports: 10_000_000_000
-            })
-        );
-        await provider.sendAndConfirm(fundTx, [wallet.payer]);
-        console.log("✅ Vault authority funded\n");
 
         [adapterRegistry, adapterRegistryBump] = PublicKey.findProgramAddressSync(
             [Buffer.from("adapter_registry")],
@@ -135,6 +164,9 @@ async function setupProgram() {
             })
             .signers([wallet.payer])
             .rpc();
+
+        await waitForConfirmation(3000);
+         
         console.log("✅ Vault authority created\n");
 
         // Create mints
@@ -149,6 +181,9 @@ async function setupProgram() {
             undefined,
             TOKEN_PROGRAM_ID
         );
+
+        await waitForConfirmation(3000);
+
         destinationMint = await createMint(
             connection,
             wallet.payer,
@@ -159,6 +194,9 @@ async function setupProgram() {
             undefined,
             TOKEN_PROGRAM_ID
         );
+
+        await waitForConfirmation(3000);
+
         console.log("   Source Mint:", sourceMint.toBase58());
         console.log("   Destination Mint:", destinationMint.toBase58(), "\n");
 
@@ -191,6 +229,8 @@ async function setupProgram() {
                 })
                 .signers([wallet.payer])
                 .rpc();
+
+            await waitForConfirmation(3000);
             console.log(`   ✅ ${name} vault created`);
         }
         console.log();
@@ -206,6 +246,8 @@ async function setupProgram() {
             TOKEN_PROGRAM_ID,  // programId
             undefined
         );
+
+        await waitForConfirmation(3000);
         userDestinationTokenAccount = await createAssociatedTokenAccount(
             connection,
             user,
@@ -215,13 +257,18 @@ async function setupProgram() {
             TOKEN_PROGRAM_ID,  // programId
             undefined
         );
+
+        await waitForConfirmation(3000);
         console.log("✅ User token accounts created\n");
 
         // Mint tokens to user and vaults
         console.log("🎁 Minting tokens...");
         await mintTo(connection, wallet.payer, sourceMint, userSourceTokenAccount, wallet.publicKey, 1_000_000_000_000);
+        await waitForConfirmation(3000);
         await mintTo(connection, wallet.payer, sourceMint, inputVault, wallet.publicKey, 1_000_000_000_000);
+        await waitForConfirmation(3000);
         await mintTo(connection, wallet.payer, destinationMint, outputVault, wallet.publicKey, 1_000_000_000_000);
+        await waitForConfirmation(3000);
         console.log("✅ Tokens minted\n");
 
         // Create platform fee account
@@ -236,6 +283,8 @@ async function setupProgram() {
             TOKEN_PROGRAM_ID,
             ASSOCIATED_TOKEN_PROGRAM_ID
         );
+
+        await waitForConfirmation(3000);
         platformFeeAccount = tokenAccount.address;
 
         // Setup mock Raydium
@@ -254,6 +303,7 @@ async function setupProgram() {
             })
             .signers([wallet.payer])
             .rpc();
+        await waitForConfirmation(3000);
         console.log("✅ Adapter registry initialized\n");
 
         // Configure Raydium adapter
@@ -267,6 +317,7 @@ async function setupProgram() {
             .accounts({ adapterRegistry, operator: wallet.publicKey })
             .signers([wallet.payer])
             .rpc();
+        await waitForConfirmation(3000);
         console.log("✅ Raydium adapter configured\n");
 
         // Setup Raydium pool
@@ -291,6 +342,8 @@ async function setupProgram() {
             TOKEN_PROGRAM_ID,
             ASSOCIATED_TOKEN_PROGRAM_ID
         );
+
+        await waitForConfirmation(3000);
         raydiumTokenBVault = getAssociatedTokenAddressSync(
             tokenBMint,
             raydiumPoolAuthority,
@@ -299,6 +352,7 @@ async function setupProgram() {
             ASSOCIATED_TOKEN_PROGRAM_ID
         );
 
+        await waitForConfirmation(3000);
         raydiumObservationState = Keypair.generate().publicKey;
 
         // Create user token accounts for pool
@@ -312,6 +366,7 @@ async function setupProgram() {
             undefined         // allowOwnerOffCurve
         );
 
+        await waitForConfirmation(3000);
         const userTokenBAccount = await createAssociatedTokenAccount(
             connection,
             wallet.payer,
@@ -322,9 +377,13 @@ async function setupProgram() {
             undefined         // allowOwnerOffCurve
         );
 
+        await waitForConfirmation(3000);
+
         // Mint tokens to pool accounts
         await mintTo(connection, wallet.payer, tokenAMint, userTokenAAccount, wallet.publicKey, 1_000_000_000_000, [], undefined, TOKEN_PROGRAM_ID);
+        await waitForConfirmation(3000);
         await mintTo(connection, wallet.payer, tokenBMint, userTokenBAccount, wallet.publicKey, 1_000_000_000_000, [], undefined, TOKEN_PROGRAM_ID);
+        await waitForConfirmation(3000);
 
         // Initialize Raydium pool
         await mockRaydiumProgram.methods
@@ -346,6 +405,7 @@ async function setupProgram() {
             })
             .signers([wallet.payer])
             .rpc();
+        await waitForConfirmation(3000);
         console.log("✅ Raydium pool initialized\n");
 
         // Initialize pool info
@@ -364,6 +424,7 @@ async function setupProgram() {
             })
             .signers([wallet.payer])
             .rpc();
+        await waitForConfirmation(3000);
         console.log("✅ Pool info initialized\n");
 
         console.log("🎉 Setup completed successfully!\n");
@@ -438,6 +499,8 @@ async function executeSwap() {
             .remainingAccounts(remainingAccounts)
             .signers([user])
             .rpc();
+
+        await waitForConfirmation(3000);
 
         console.log("✅ Swap transaction signature:", txSignature, "\n");
 
