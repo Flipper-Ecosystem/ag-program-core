@@ -199,8 +199,11 @@ pub fn validate_route<'info>(
             return Err(ErrorCode::InvalidPoolAddress.into());
         }
 
-        // Calculate correct range for adapter accounts
-        let (adapter_start_index, adapter_end_index) = calculate_adapter_accounts_range(step, route_plan, i);
+        // Calculate adapter accounts range once
+        let (adapter_start_index, adapter_accounts_count) = calculate_adapter_accounts_range(step, route_plan, i);
+
+        // Calculate end index for bounds check
+        let adapter_end_index = adapter_start_index + adapter_accounts_count;
 
         // Ensure we have enough accounts for this adapter
         if remaining_accounts.len() < adapter_end_index {
@@ -209,7 +212,6 @@ pub fn validate_route<'info>(
 
         // Validate adapter accounts with correct range
         let adapter = get_adapter(&step.swap, adapter_registry)?;
-        let (adapter_start_index, adapter_accounts_count) = calculate_adapter_accounts_range(step, route_plan, i);
 
         let adapter_ctx = AdapterContext {
             token_program: input_token_program.clone(),
