@@ -57,11 +57,15 @@ pub struct LimitOrder {
     pub expiry: i64,
     /// Current order status
     pub status: OrderStatus,
+
+    pub slippage_bps: u16,
     /// PDA bump seed
     pub bump: u8,
 }
 
 impl LimitOrder {
+
+    pub const SPACE: usize = 8 + 191;
     /// Checks if order should be executed based on current price
     ///
     /// # Arguments
@@ -99,6 +103,15 @@ impl LimitOrder {
             }
         }
     }
+
+    pub fn calculate_min_acceptable_output(&self, quoted_amount: u64) -> Result<u64> {
+        let min_output = (quoted_amount as u128)
+            .checked_mul((10_000u128).checked_sub(self.slippage_bps as u128).unwrap())
+            .unwrap()
+            .checked_div(10_000)
+            .unwrap() as u64;
+        Ok(min_output)
+    }
 }
 
 /// Create limit order instruction accounts
@@ -117,7 +130,7 @@ pub struct CreateLimitOrder<'info> {
     #[account(
         init,
         payer = creator,
-        space = 8 + 32 + 32 + 32 + 32 + 32 + 8 + 8 + 2 + 1 + 8 + 1 + 1,
+        space = LimitOrder::SPACE,
         seeds = [b"limit_order", creator.key().as_ref(), nonce.to_le_bytes().as_ref()],
         bump
     )]
@@ -183,6 +196,7 @@ pub fn create_limit_order(
     trigger_price_bps: u16,
     trigger_type: TriggerType,
     expiry: i64,
+    slippage_bps: u16
 ) -> Result<()> {
     // Validate input parameters
     if input_amount == 0 {
@@ -197,6 +211,11 @@ pub fn create_limit_order(
     if expiry <= Clock::get()?.unix_timestamp {
         return Err(ErrorCode::InvalidExpiry.into());
     }
+
+    require!(
+        slippage_bps <= 1000,
+        ErrorCode::InvalidSlippage
+    );
 
     // Transfer input tokens to order vault
     transfer_checked(
@@ -226,6 +245,7 @@ pub fn create_limit_order(
     order.trigger_type = trigger_type;
     order.expiry = expiry;
     order.status = OrderStatus::Open;
+    order.slippage_bps = slippage_bps;
     order.bump = ctx.bumps.limit_order;
 
     // Emit order creation event
@@ -332,22 +352,6 @@ pub fn execute_limit_order<'info>(
         return Err(ErrorCode::TriggerPriceNotMet.into());
     }
 
-    // Additional validation based on order type
-    match ctx.accounts.limit_order.trigger_type {
-        TriggerType::TakeProfit => {
-            // For Take Profit: quoted must be >= min_output (price increased)
-            if quoted_out_amount < ctx.accounts.limit_order.min_output_amount {
-                return Err(ErrorCode::InsufficientOutputAmount.into());
-            }
-        },
-        TriggerType::StopLoss => {
-            // For Stop Loss: quoted must be <= min_output (price decreased)
-            if quoted_out_amount > ctx.accounts.limit_order.min_output_amount {
-                return Err(ErrorCode::StopLossPriceNotReached.into());
-            }
-        }
-    }
-
     let in_amount = ctx.accounts.limit_order.input_amount;
 
     // Validate swap route
@@ -418,20 +422,12 @@ pub fn execute_limit_order<'info>(
         return Err(ErrorCode::TriggerPriceNotMet.into());
     }
 
-    // Additional validation of actual output based on order type
-    match ctx.accounts.limit_order.trigger_type {
-        TriggerType::TakeProfit => {
-            // For Take Profit: actual output must be >= min_output
-            if output_amount < ctx.accounts.limit_order.min_output_amount {
-                return Err(ErrorCode::InsufficientOutputAmount.into());
-            }
-        },
-        TriggerType::StopLoss => {
-            // For Stop Loss: actual output must be <= min_output
-            if output_amount > ctx.accounts.limit_order.min_output_amount {
-                return Err(ErrorCode::StopLossPriceNotReached.into());
-            }
-        }
+
+    let min_acceptable = ctx.accounts.limit_order
+        .calculate_min_acceptable_output(quoted_out_amount)?;
+
+    if output_amount < min_acceptable {
+        return Err(ErrorCode::SlippageToleranceExceeded.into());
     }
 
     // Collect platform fee if specified
@@ -539,7 +535,7 @@ pub struct CancelLimitOrder<'info> {
     pub input_token_program: Interface<'info, TokenInterface>,
 
     /// Order creator (must sign)
-    #[account(signer)]
+    #[account(mut, signer)]
     pub creator: Signer<'info>,
 }
 
@@ -581,11 +577,11 @@ pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>) -> Result<()> {
     Ok(())
 }
 
+
 /// Route and create order instruction accounts
-/// This allows creating a limit order after executing an initial swap
 #[event_cpi]
 #[derive(Accounts)]
-#[instruction(route_plan: Vec<RoutePlanStep>, nonce: u64)]
+#[instruction(order_nonce: u64, route_plan: Vec<RoutePlanStep>)]
 pub struct RouteAndCreateOrder<'info> {
     /// Adapter registry for routing validation
     #[account(
@@ -594,157 +590,147 @@ pub struct RouteAndCreateOrder<'info> {
     )]
     pub adapter_registry: Account<'info, AdapterRegistry>,
 
-    /// Vault authority controlling all vaults
+    /// Vault authority PDA controlling all vaults
     #[account(
         seeds = [b"vault_authority"],
         bump
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
 
-    /// Token program for source tokens
-    pub input_token_program: Interface<'info, TokenInterface>,
-    /// Token program for intermediate tokens (result of first swap)
-    pub intermediate_token_program: Interface<'info, TokenInterface>,
-
-    /// User initiating the operation (must sign)
-    #[account(mut, signer)]
-    pub user_transfer_authority: Signer<'info>,
-
-    /// User's source account for initial swap
-    #[account(
-        mut,
-        constraint = user_source_token_account.mint == source_mint.key(),
-        constraint = user_source_token_account.owner == user_transfer_authority.key()
-    )]
-    pub user_source_token_account: InterfaceAccount<'info, TokenAccount>,
-
-    /// Source token mint (input for first swap)
-    pub source_mint: InterfaceAccount<'info, Mint>,
-    /// Intermediate token mint (output of first swap, input for order)
-    pub intermediate_mint: InterfaceAccount<'info, Mint>,
-
-    /// Final output mint for limit order execution
-    pub order_output_mint: InterfaceAccount<'info, Mint>,
-    /// Token program for final output tokens
-    pub order_output_token_program: Interface<'info, TokenInterface>,
-
-    /// User's destination account for final output tokens
-    #[account(
-        constraint = user_final_destination_account.mint == order_output_mint.key(),
-        constraint = user_final_destination_account.owner == user_transfer_authority.key()
-    )]
-    pub user_final_destination_account: InterfaceAccount<'info, TokenAccount>,
-
     /// Limit order account to be created
     #[account(
         init,
-        payer = user_transfer_authority,
-        space = 8 + 32 + 32 + 32 + 32 + 32 + 8 + 8 + 2 + 1 + 8 + 1 + 1,
-        seeds = [b"limit_order", user_transfer_authority.key().as_ref(), nonce.to_le_bytes().as_ref()],
+        payer = creator,
+        space = LimitOrder::SPACE,
+        seeds = [b"limit_order", creator.key().as_ref(), order_nonce.to_le_bytes().as_ref()],
         bump
     )]
     pub limit_order: Account<'info, LimitOrder>,
 
-    /// Vault to hold intermediate tokens for order execution
+    /// Vault to hold output tokens from swap (becomes order's input vault)
     #[account(
         init,
-        payer = user_transfer_authority,
+        payer = creator,
         seeds = [b"order_vault", limit_order.key().as_ref()],
         bump,
-        token::mint = intermediate_mint,
+        token::mint = output_mint,
         token::authority = vault_authority,
-        token::token_program = intermediate_token_program,
+        token::token_program = output_token_program,
     )]
-    pub order_vault: InterfaceAccount<'info, TokenAccount>,
+    pub input_vault: InterfaceAccount<'info, TokenAccount>,
+
+    /// User's source account for swap input tokens
+    #[account(
+        mut,
+        constraint = user_input_account.mint == input_mint.key(),
+        constraint = user_input_account.owner == creator.key()
+    )]
+    pub user_input_account: InterfaceAccount<'info, TokenAccount>,
+
+    /// User's destination account for final order output tokens
+    #[account(
+        constraint = user_destination_account.mint == output_mint.key(),
+        constraint = user_destination_account.owner == creator.key()
+    )]
+    pub user_destination_account: InterfaceAccount<'info, TokenAccount>,
+
+    /// Swap input token mint
+    pub input_mint: InterfaceAccount<'info, Mint>,
+
+    /// Swap output token mint (becomes order input/output mint)
+    pub output_mint: InterfaceAccount<'info, Mint>,
+
+    /// Token program for swap input tokens
+    pub input_token_program: Interface<'info, TokenInterface>,
+
+    /// Token program for swap/order output tokens
+    pub output_token_program: Interface<'info, TokenInterface>,
 
     /// Optional platform fee collection account
     #[account(mut)]
     pub platform_fee_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
+    /// Order creator (must sign)
+    #[account(mut, signer)]
+    pub creator: Signer<'info>,
+
     /// System program for account creation
     pub system_program: Program<'info, System>,
 }
 
-/// Executes a swap and creates a limit order with the output
-/// This is useful for two-step trading strategies (e.g., SOL -> USDC -> BTC)
+/// Executes a swap and creates a limit order with the swapped tokens
 ///
 /// # Arguments
-/// * `route_plan` - Swap route for initial swap
-/// * `in_amount` - Amount of source tokens to swap
-/// * `quoted_out_amount` - Expected output from initial swap
-/// * `slippage_bps` - Slippage tolerance in basis points
-/// * `platform_fee_bps` - Platform fee in basis points
-/// * `nonce` - Unique identifier for order creation
-/// * `min_order_output_amount` - Minimum output for limit order (baseline for trigger)
-/// * `trigger_price_bps` - Trigger deviation percentage
-/// * `trigger_type` - Type of trigger (TakeProfit or StopLoss)
-/// * `expiry` - Order expiration timestamp
+/// * `order_nonce` - Unique identifier for order creation
+/// * `route_plan` - Swap route to execute
+/// * `in_amount` - Amount of input tokens to swap
+/// * `quoted_out_amount` - Expected output amount from swap quote
+/// * `slippage_bps` - Slippage tolerance for swap in basis points
+/// * `platform_fee_bps` - Platform fee for swap in basis points
+/// * `order_min_output_amount` - Minimum output amount for the limit order
+/// * `order_trigger_price_bps` - Trigger deviation percentage in basis points
+/// * `order_trigger_type` - Type of trigger (TakeProfit or StopLoss)
+/// * `order_expiry` - Order expiration timestamp
+/// * `order_slippage_bps` - Slippage tolerance for order execution
 ///
 /// # Returns
-/// * `Result<u64>` - Intermediate amount stored in order vault
+/// * `Result<(u64, Pubkey)>` - (Swap output amount, Created order pubkey)
 pub fn route_and_create_order<'info>(
     ctx: Context<'_, '_, 'info, 'info, RouteAndCreateOrder<'info>>,
+    order_nonce: u64,
     route_plan: Vec<RoutePlanStep>,
     in_amount: u64,
     quoted_out_amount: u64,
     slippage_bps: u16,
     platform_fee_bps: u8,
-    nonce: u64,
-    min_order_output_amount: u64,
-    trigger_price_bps: u16,
-    trigger_type: TriggerType,
-    expiry: i64,
-) -> Result<u64> {
-    // Validate input parameters
-    if slippage_bps > 10_000 {
-        return Err(ErrorCode::InvalidSlippage.into());
-    }
-    if trigger_price_bps == 0 || trigger_price_bps > 10_000 {
-        return Err(ErrorCode::InvalidTriggerPrice.into());
-    }
-    if expiry <= Clock::get()?.unix_timestamp {
-        return Err(ErrorCode::InvalidExpiry.into());
-    }
+    order_min_output_amount: u64,
+    order_trigger_price_bps: u16,
+    order_expiry: i64,
+    order_slippage_bps: u16,
+) -> Result<(u64, Pubkey)> {
+    // ===== VALIDATION =====
 
-    // Validate platform fee account
-    if let Some(platform_fee_account) = &ctx.accounts.platform_fee_account {
-        if platform_fee_account.owner != ctx.accounts.vault_authority.key() {
-            return Err(ErrorCode::InvalidPlatformFeeOwner.into());
-        }
-        if platform_fee_account.mint != ctx.accounts.intermediate_mint.key() {
-            return Err(ErrorCode::InvalidPlatformFeeMint.into());
-        }
-    }
+    // Validate swap parameters
+    require!(in_amount > 0, ErrorCode::InvalidAmount);
+    require!(quoted_out_amount > 0, ErrorCode::InvalidAmount);
+    require!(slippage_bps <= 1000, ErrorCode::InvalidSlippage);
 
-    // Validate swap route: source -> intermediate
+    // Validate order parameters
+    require!(order_min_output_amount > 0, ErrorCode::InvalidAmount);
+    require!(
+        order_trigger_price_bps > 0 && order_trigger_price_bps <= 10_000,
+        ErrorCode::InvalidTriggerPrice
+    );
+    require!(
+        order_expiry > Clock::get()?.unix_timestamp,
+        ErrorCode::InvalidExpiry
+    );
+    require!(order_slippage_bps <= 1000, ErrorCode::InvalidSlippage);
+
+    // ===== STEP 1: VALIDATE SWAP ROUTE =====
+
     route_validator_module::validate_route(
         &ctx.accounts.adapter_registry,
         &ctx.accounts.input_token_program.to_account_info(),
-        &ctx.accounts.intermediate_token_program.to_account_info(),
+        &ctx.accounts.output_token_program.to_account_info(),
         &ctx.accounts.vault_authority.to_account_info(),
-        &ctx.accounts.source_mint.to_account_info(),
-        &ctx.accounts.intermediate_mint.to_account_info(),
+        &ctx.accounts.input_mint.to_account_info(),
+        &ctx.accounts.output_mint.to_account_info(),
         &route_plan,
         ctx.remaining_accounts,
         ctx.program_id,
         in_amount,
     )?;
 
-    // Prepare PDA signer seeds
-    let vault_authority_bump = ctx.bumps.vault_authority;
-    let authority_seeds: &[&[u8]] = &[
-        b"vault_authority".as_ref(),
-        &[vault_authority_bump],
-    ];
-    let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
+    // ===== STEP 2: TRANSFER TOKENS FROM USER TO TEMP VAULT =====
 
-    // Find input vault for initial swap
+    // Find or use first vault in remaining accounts as temporary swap source
     let input_vault = ctx.remaining_accounts
         .iter()
         .find(|acc| {
             if let Ok(account_data) = acc.try_borrow_data() {
                 if let Ok(token_account) = TokenAccount::try_deserialize(&mut account_data.as_ref()) {
-                    token_account.mint == ctx.accounts.source_mint.key()
+                    token_account.mint == ctx.accounts.input_mint.key()
                 } else {
                     false
                 }
@@ -754,28 +740,38 @@ pub fn route_and_create_order<'info>(
         })
         .ok_or(ErrorCode::VaultNotFound)?;
 
-    // Transfer source tokens to input vault
+    // Transfer swap input tokens from user to vault
     transfer_checked(
         CpiContext::new(
             ctx.accounts.input_token_program.to_account_info(),
             TransferChecked {
-                from: ctx.accounts.user_source_token_account.to_account_info(),
+                from: ctx.accounts.user_input_account.to_account_info(),
                 to: input_vault.clone(),
-                authority: ctx.accounts.user_transfer_authority.to_account_info(),
-                mint: ctx.accounts.source_mint.to_account_info(),
+                authority: ctx.accounts.creator.to_account_info(),
+                mint: ctx.accounts.input_mint.to_account_info(),
             },
         ),
         in_amount,
-        ctx.accounts.source_mint.decimals,
+        ctx.accounts.input_mint.decimals,
     )?;
 
-    // Execute swap route into order vault
-    let (mut output_amount, event_data) = route_executor_module::execute_route(
+    // ===== STEP 3: EXECUTE SWAP =====
+
+    // Prepare PDA signer seeds
+    let vault_authority_bump = ctx.bumps.vault_authority;
+    let authority_seeds: &[&[u8]] = &[
+        b"vault_authority".as_ref(),
+        &[vault_authority_bump],
+    ];
+    let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
+
+    // Execute swap route
+    let (mut out_amount, event_data) = route_executor_module::execute_route(
         &ctx.accounts.adapter_registry,
         &ctx.accounts.input_token_program.to_account_info(),
         &ctx.accounts.vault_authority.to_account_info(),
-        &ctx.accounts.source_mint.to_account_info(),
-        &ctx.accounts.order_vault.to_account_info(),
+        &ctx.accounts.input_mint.to_account_info(),
+        &ctx.accounts.input_vault.to_account_info(), // Output goes directly to order vault
         &route_plan,
         ctx.remaining_accounts,
         ctx.program_id,
@@ -793,58 +789,80 @@ pub fn route_and_create_order<'info>(
         });
     }
 
-    // Collect platform fee from intermediate tokens
+    // ===== STEP 4: VERIFY SLIPPAGE =====
+
+    let min_out_amount = (quoted_out_amount as u128)
+        .checked_mul((10_000u128).checked_sub(slippage_bps as u128).unwrap())
+        .unwrap()
+        .checked_div(10_000)
+        .unwrap() as u64;
+
+    require!(
+        out_amount >= min_out_amount,
+        ErrorCode::SlippageToleranceExceeded
+    );
+
+    // ===== STEP 5: COLLECT PLATFORM FEE FROM SWAP =====
+
+    let mut fee_amount = 0u64;
     if let Some(platform_fee_account) = &ctx.accounts.platform_fee_account {
-        let fee_amount = (output_amount as u128 * platform_fee_bps as u128 / 10_000) as u64;
+        require!(
+            platform_fee_account.mint == ctx.accounts.output_mint.key(),
+            ErrorCode::InvalidPlatformFeeMint
+        );
+
+        fee_amount = (out_amount as u128 * platform_fee_bps as u128 / 10_000) as u64;
         if fee_amount > 0 {
             transfer_checked(
                 CpiContext::new_with_signer(
-                    ctx.accounts.intermediate_token_program.to_account_info(),
+                    ctx.accounts.output_token_program.to_account_info(),
                     TransferChecked {
-                        from: ctx.accounts.order_vault.to_account_info(),
+                        from: ctx.accounts.input_vault.to_account_info(),
                         to: platform_fee_account.to_account_info(),
                         authority: ctx.accounts.vault_authority.to_account_info(),
-                        mint: ctx.accounts.intermediate_mint.to_account_info(),
+                        mint: ctx.accounts.output_mint.to_account_info(),
                     },
                     signer_seeds
                 ),
                 fee_amount,
-                ctx.accounts.intermediate_mint.decimals,
+                ctx.accounts.output_mint.decimals,
             )?;
 
             emit_cpi!(FeeEvent {
                 account: platform_fee_account.key(),
-                mint: ctx.accounts.intermediate_mint.key(),
+                mint: ctx.accounts.output_mint.key(),
                 amount: fee_amount,
             });
 
-            output_amount = output_amount.checked_sub(fee_amount).ok_or(ErrorCode::InvalidCalculation)?;
+            out_amount = out_amount
+                .checked_sub(fee_amount)
+                .ok_or(ErrorCode::InvalidCalculation)?;
         }
     }
 
-    // Verify slippage tolerance
-    if output_amount < quoted_out_amount * (10_000 - slippage_bps as u64) / 10_000 {
-        return Err(ErrorCode::SlippageToleranceExceeded.into());
-    }
+    // ===== STEP 6: CREATE LIMIT ORDER =====
 
-    // Initialize limit order with intermediate tokens
     let order = &mut ctx.accounts.limit_order;
-    order.creator = ctx.accounts.user_transfer_authority.key();
-    order.input_mint = ctx.accounts.intermediate_mint.key(); // Intermediate token as input
-    order.output_mint = ctx.accounts.order_output_mint.key(); // Final output token
-    order.input_vault = ctx.accounts.order_vault.key();
-    order.user_destination_account = ctx.accounts.user_final_destination_account.key();
-    order.input_amount = output_amount;
-    order.min_output_amount = min_order_output_amount;
-    order.trigger_price_bps = trigger_price_bps;
-    order.trigger_type = trigger_type;
-    order.expiry = expiry;
+    order.creator = ctx.accounts.creator.key();
+    order.input_mint = ctx.accounts.output_mint.key(); // Order input is swap output
+    order.output_mint = ctx.accounts.output_mint.key(); // Same token for order output
+    order.input_vault = ctx.accounts.input_vault.key();
+    order.user_destination_account = ctx.accounts.user_destination_account.key();
+    order.input_amount = out_amount; // Amount after fee
+    order.min_output_amount = order_min_output_amount;
+    order.trigger_price_bps = order_trigger_price_bps;
+    order.trigger_type = TriggerType::TakeProfit;
+    order.expiry = order_expiry;
     order.status = OrderStatus::Open;
+    order.slippage_bps = order_slippage_bps;
     order.bump = ctx.bumps.limit_order;
 
-    // Emit order creation event
+    let order_key = order.key();
+
+    // ===== EMIT EVENTS =====
+
     emit_cpi!(LimitOrderCreated {
-        order: order.key(),
+        order: order_key,
         creator: order.creator,
         input_mint: order.input_mint,
         output_mint: order.output_mint,
@@ -855,8 +873,18 @@ pub fn route_and_create_order<'info>(
         expiry: order.expiry,
     });
 
-    Ok(output_amount)
+    emit_cpi!(RouteAndCreateOrderEvent {
+        order: order_key,
+        swap_input_mint: ctx.accounts.input_mint.key(),
+        swap_input_amount: in_amount,
+        swap_output_amount: out_amount,
+        fee_amount,
+        order_input_amount: out_amount,
+    });
+
+    Ok((out_amount, order_key))
 }
+
 
 
 

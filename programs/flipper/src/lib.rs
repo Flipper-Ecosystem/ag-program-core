@@ -111,6 +111,7 @@ pub mod flipper {
         trigger_price_bps: u16,
         trigger_type: TriggerType,
         expiry: i64,
+        slippage_bps: u16
     ) -> Result<()> {
         instructions::create_limit_order(
             ctx,
@@ -120,6 +121,7 @@ pub mod flipper {
             trigger_price_bps,
             trigger_type,
             expiry,
+            slippage_bps
         )
     }
 
@@ -145,32 +147,31 @@ pub mod flipper {
         instructions::cancel_limit_order(ctx)
     }
 
-    /// Executes a swap and creates a limit order with the output
     pub fn route_and_create_order<'info>(
         ctx: Context<'_, '_, 'info, 'info, RouteAndCreateOrder<'info>>,
-        route_plan: Vec<RoutePlanStep>,
+        order_nonce: u64,
+        route_plan: Vec<crate::state::RoutePlanStep>,
         in_amount: u64,
         quoted_out_amount: u64,
         slippage_bps: u16,
         platform_fee_bps: u8,
-        nonce: u64,
-        min_order_output_amount: u64,
-        trigger_price_bps: u16,
-        trigger_type: TriggerType,
-        expiry: i64,
-    ) -> Result<u64> {
+        order_min_output_amount: u64,
+        order_trigger_price_bps: u16,
+        order_expiry: i64,
+        order_slippage_bps: u16,
+    ) -> Result<(u64, Pubkey)> {
         instructions::route_and_create_order(
             ctx,
+            order_nonce,
             route_plan,
             in_amount,
             quoted_out_amount,
             slippage_bps,
             platform_fee_bps,
-            nonce,
-            min_order_output_amount,
-            trigger_price_bps,
-            trigger_type,
-            expiry,
+            order_min_output_amount,
+            order_trigger_price_bps,
+            order_expiry,
+            order_slippage_bps
         )
     }
 }

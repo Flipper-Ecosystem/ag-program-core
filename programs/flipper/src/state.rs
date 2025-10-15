@@ -128,6 +128,7 @@ pub struct RegistryReset {
     pub authority: Pubkey,
 }
 
+
 use anchor_lang::prelude::*;
 
 
@@ -161,6 +162,17 @@ pub struct LimitOrderCancelled {
     pub order: Pubkey,
     pub creator: Pubkey,
 }
+
+#[event]
+pub struct RouteAndCreateOrderEvent {
+    pub order: Pubkey,
+    pub swap_input_mint: Pubkey,
+    pub swap_input_amount: u64,
+    pub swap_output_amount: u64,
+    pub fee_amount: u64,
+    pub order_input_amount: u64,
+}
+
 // Defines supported swap types for various DEX protocols
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq)]
 pub enum Swap {

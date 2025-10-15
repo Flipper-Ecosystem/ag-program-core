@@ -23,6 +23,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
     let wallet: anchor.Wallet;
     let admin: Keypair;
     let user: Keypair;
+    let operator: Keypair;
     let treasury: Keypair;
     let vaultAuthority: PublicKey;
     let vaultAuthorityBump: number;
@@ -81,10 +82,12 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
         wallet = provider.wallet as anchor.Wallet;
         admin = wallet.payer;
         user = Keypair.generate();
+        operator = Keypair.generate();
         treasury = Keypair.generate();
 
         // Fund user
         await provider.connection.requestAirdrop(user.publicKey, 10_000_000_000);
+        await provider.connection.requestAirdrop(operator.publicKey, 10_000_000_000);
         await provider.connection.requestAirdrop(treasury.publicKey, 10_000_000_000);
 
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -178,7 +181,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
         raydiumAmmConfig = raydiumAmmConfigKeypair.publicKey;
 
         await program.methods
-            .initializeAdapterRegistry([], [])
+            .initializeAdapterRegistry([], [operator.publicKey])
             .accounts({
                 adapterRegistry,
                 payer: wallet.publicKey,
@@ -395,5 +398,553 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             finalDest > (initialDest + expectedOutAmount),
             "Destination balance incorrect"
         );
+    });
+
+    it("2. Create limit order (Take Profit)", async () => {
+        const nonce = new BN(Date.now());
+        const inputAmount = new BN(50_000_000);
+        const minOutputAmount = new BN(45_000_000);
+        const triggerPriceBps = 1000; // 10% price increase
+        const triggerType = { takeProfit: {} };
+        const expiry = new BN(Math.floor(Date.now() / 1000) + 3600); // 1 hour
+        const slippageBps = 300;
+
+        const [limitOrder] = PublicKey.findProgramAddressSync(
+            [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+            program.programId
+        );
+
+        const [orderVault] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_vault"), limitOrder.toBuffer()],
+            program.programId
+        );
+
+        const initialBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
+
+        await program.methods
+            .createLimitOrder(
+                nonce,
+                inputAmount,
+                minOutputAmount,
+                triggerPriceBps,
+                triggerType,
+                expiry,
+                slippageBps
+            )
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                userInputTokenAccount: userSourceTokenAccount,
+                userDestinationTokenAccount: userDestinationTokenAccount,
+                inputMint: sourceMint,
+                outputMint: destinationMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                outputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+            })
+            .signers([user])
+            .rpc();
+
+        const finalBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
+        const vaultBalance = (await getAccount(provider.connection, orderVault)).amount;
+
+        assert.equal(
+            finalBalance.toString(),
+            (initialBalance - BigInt(inputAmount.toString())).toString(),
+            "User balance not decreased"
+        );
+        assert.equal(
+            vaultBalance.toString(),
+            inputAmount.toString(),
+            "Vault balance incorrect"
+        );
+
+        const orderAccount = await program.account.limitOrder.fetch(limitOrder);
+        assert.equal(orderAccount.inputAmount.toString(), inputAmount.toString());
+        assert.equal(orderAccount.status.open !== undefined, true);
+    });
+
+    it("3. Execute limit order when trigger met", async () => {
+        const nonce = new BN(Date.now());
+        const inputAmount = new BN(50_000_000);
+        const minOutputAmount = new BN(30_000_000);
+        const triggerPriceBps = 500; // 5% price increase
+        const triggerType = { takeProfit: {} };
+        const expiry = new BN(Math.floor(Date.now() / 1000) + 3600);
+        const slippageBps = 300;
+
+        // Create order
+        const [limitOrder] = PublicKey.findProgramAddressSync(
+            [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+            program.programId
+        );
+
+        const [orderVault] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_vault"), limitOrder.toBuffer()],
+            program.programId
+        );
+
+        await program.methods
+            .createLimitOrder(
+                nonce,
+                inputAmount,
+                minOutputAmount,
+                triggerPriceBps,
+                triggerType,
+                expiry,
+                slippageBps
+            )
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                userInputTokenAccount: userSourceTokenAccount,
+                userDestinationTokenAccount: userDestinationTokenAccount,
+                inputMint: sourceMint,
+                outputMint: destinationMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                outputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+            })
+            .signers([user])
+            .rpc();
+
+        // Execute order
+        const quotedOutAmount = new BN(39_486_167);
+        const platformFeeBps = 10; // 0.1%
+
+        const routePlan = [
+            { swap: { raydium: {} }, percent: 100, inputIndex: 0, outputIndex: 13 }
+        ];
+
+        const inputPoolVault = sourceMint.toString() < destinationMint.toString()
+            ? raydiumTokenAVault
+            : raydiumTokenBVault;
+        const outputPoolVault = sourceMint.toString() < destinationMint.toString()
+            ? raydiumTokenBVault
+            : raydiumTokenAVault;
+
+        const remainingAccounts = [
+            { pubkey: orderVault, isWritable: true, isSigner: false },
+            { pubkey: raydiumPoolInfo, isWritable: true, isSigner: false },
+            { pubkey: raydiumPoolAuthority, isWritable: false, isSigner: false },
+            { pubkey: raydiumAmmConfig, isWritable: false, isSigner: false },
+            { pubkey: raydiumPoolState, isWritable: true, isSigner: false },
+            { pubkey: inputPoolVault, isWritable: true, isSigner: false },
+            { pubkey: outputPoolVault, isWritable: true, isSigner: false },
+            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+            { pubkey: sourceMint, isWritable: false, isSigner: false },
+            { pubkey: destinationMint, isWritable: false, isSigner: false },
+            { pubkey: raydiumObservationState, isWritable: true, isSigner: false },
+            { pubkey: mockRaydiumProgramId, isWritable: false, isSigner: false },
+            { pubkey: outputVault, isWritable: true, isSigner: false },
+        ];
+
+        const initialDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
+
+        const orderData = await program.account.limitOrder.fetch(limitOrder);
+
+        const priceRatio = quotedOutAmount.mul(new BN(10000)).div(orderData.minOutputAmount);
+        const triggerRatio = 10000 + orderData.triggerPriceBps;
+
+        await program.methods
+            .executeLimitOrder(routePlan, quotedOutAmount, platformFeeBps)
+            .accounts({
+                adapterRegistry,
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                outputTokenProgram: TOKEN_PROGRAM_ID,
+                userDestinationTokenAccount,
+                inputMint: sourceMint,
+                outputMint: destinationMint,
+                platformFeeAccount,
+                operator: operator.publicKey,
+            })
+            .remainingAccounts(remainingAccounts)
+            .signers([operator])
+            .rpc();
+
+        const finalDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
+        assert(finalDestBalance > initialDestBalance, "Destination balance should increase");
+
+
+        const orderAccount = await program.account.limitOrder.fetch(limitOrder);
+        assert.equal(orderAccount.status.filled !== undefined, true);
+    });
+
+    it("4. Cancel limit order", async () => {
+        const nonce = new BN(Date.now());
+        const inputAmount = new BN(50_000_000);
+        const minOutputAmount = new BN(45_000_000);
+        const triggerPriceBps = 1000;
+        const triggerType = { takeProfit: {} };
+        const expiry = new BN(Math.floor(Date.now() / 1000) + 3600);
+        const slippageBps = 300;
+
+        const [limitOrder] = PublicKey.findProgramAddressSync(
+            [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+            program.programId
+        );
+
+        const [orderVault] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_vault"), limitOrder.toBuffer()],
+            program.programId
+        );
+
+        // Create order
+        await program.methods
+            .createLimitOrder(
+                nonce,
+                inputAmount,
+                minOutputAmount,
+                triggerPriceBps,
+                triggerType,
+                expiry,
+                slippageBps
+            )
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                userInputTokenAccount: userSourceTokenAccount,
+                userDestinationTokenAccount: userDestinationTokenAccount,
+                inputMint: sourceMint,
+                outputMint: destinationMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                outputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+            })
+            .signers([user])
+            .rpc();
+
+        const initialBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
+
+        // Cancel order
+        await program.methods
+            .cancelLimitOrder()
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                userInputTokenAccount: userSourceTokenAccount,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+            })
+            .signers([user])
+            .rpc();
+
+        const finalBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
+        assert.equal(
+            finalBalance.toString(),
+            (initialBalance + BigInt(inputAmount.toString())).toString(),
+            "Tokens not refunded"
+        );
+    });
+
+    it("5. Route and create order (swap then create limit order)", async () => {
+        const swapInAmount = new BN(100_000_000); // 100 source tokens
+        const swapQuotedOutAmount = new BN(10_000_000); // ~10 destination tokens expected
+        const swapSlippageBps = 100; // 1% slippage for swap
+        const swapPlatformFeeBps = 50; // 0.5% platform fee
+
+        // Параметры для лимит ордера
+        const orderNonce = new BN(Date.now());
+        const orderMinOutputAmount = new BN(85_000_000); // baseline for trigger
+        const orderTriggerPriceBps = 500; // 5% price increase for take profit
+        const orderExpiry = new BN(Math.floor(Date.now() / 1000) + 7200); // 2 hours
+        const orderSlippageBps = 300; // 3% slippage for order execution
+
+        // Деривация аккаунтов
+        const [limitOrder] = PublicKey.findProgramAddressSync(
+            [Buffer.from("limit_order"), user.publicKey.toBuffer(), orderNonce.toArrayLike(Buffer, 'le', 8)],
+            program.programId
+        );
+
+        const [orderVault] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_vault"), limitOrder.toBuffer()],
+            program.programId
+        );
+
+        // Route plan для свопа source -> destination
+        const routePlan = [
+            { swap: { raydium: {} }, percent: 100, inputIndex: 0, outputIndex: 13 }
+        ];
+
+        const inputPoolVault = sourceMint.toString() < destinationMint.toString()
+            ? raydiumTokenAVault
+            : raydiumTokenBVault;
+        const outputPoolVault = sourceMint.toString() < destinationMint.toString()
+            ? raydiumTokenBVault
+            : raydiumTokenAVault;
+
+        // Remaining accounts для свопа
+        const remainingAccounts = [
+            { pubkey: inputVault, isWritable: true, isSigner: false }, // index 0: temp input vault
+            { pubkey: raydiumPoolInfo, isWritable: true, isSigner: false }, // index 1
+            { pubkey: raydiumPoolAuthority, isWritable: false, isSigner: false }, // index 2
+            { pubkey: raydiumAmmConfig, isWritable: false, isSigner: false }, // index 3
+            { pubkey: raydiumPoolState, isWritable: true, isSigner: false }, // index 4
+            { pubkey: inputPoolVault, isWritable: true, isSigner: false }, // index 5
+            { pubkey: outputPoolVault, isWritable: true, isSigner: false }, // index 6
+            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false }, // index 7
+            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false }, // index 8
+            { pubkey: sourceMint, isWritable: false, isSigner: false }, // index 9
+            { pubkey: destinationMint, isWritable: false, isSigner: false }, // index 10
+            { pubkey: raydiumObservationState, isWritable: true, isSigner: false }, // index 11
+            { pubkey: mockRaydiumProgramId, isWritable: false, isSigner: false }, // index 12
+            { pubkey: orderVault, isWritable: true, isSigner: false }, // index 13: output goes to order vault
+        ];
+
+        // Начальные балансы
+        const initialSourceBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
+        const initialDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
+
+        // Выполняем route_and_create_order
+        const tx = await program.methods
+            .routeAndCreateOrder(
+                orderNonce,
+                routePlan,
+                swapInAmount,
+                swapQuotedOutAmount,
+                swapSlippageBps,
+                swapPlatformFeeBps,
+                orderMinOutputAmount,
+                orderTriggerPriceBps,
+                orderExpiry,
+                orderSlippageBps
+            )
+            .accounts({
+                adapterRegistry,
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                userInputAccount: userSourceTokenAccount,
+                userDestinationAccount: userDestinationTokenAccount,
+                inputMint: sourceMint,
+                outputMint: destinationMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                outputTokenProgram: TOKEN_PROGRAM_ID,
+                platformFeeAccount,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+            })
+            .remainingAccounts(remainingAccounts)
+            .signers([user])
+            .rpc();
+
+
+        const finalSourceBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
+
+        assert.equal(
+            finalSourceBalance.toString(),
+            (initialSourceBalance - BigInt(swapInAmount.toString())).toString(),
+            "Source tokens should be deducted"
+        );
+
+        const finalDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
+        assert.equal(
+            finalDestBalance.toString(),
+            initialDestBalance.toString(),
+            "User destination balance should not change (tokens in order vault)"
+        );
+
+
+        const orderVaultBalance = (await getAccount(provider.connection, orderVault)).amount;
+        assert(orderVaultBalance > 0n, "Order vault should have tokens from swap");
+
+        const minSwapOut = swapQuotedOutAmount
+            .mul(new BN(10000 - swapSlippageBps))
+            .div(new BN(10000));
+        const feeAmount = minSwapOut.mul(new BN(swapPlatformFeeBps)).div(new BN(10000));
+        const expectedVaultBalance = minSwapOut.sub(feeAmount);
+
+        assert(
+            orderVaultBalance >= BigInt(expectedVaultBalance.toString()),
+            "Order vault balance should be at least expected amount after fees"
+        );
+
+        
+        const orderAccount = await program.account.limitOrder.fetch(limitOrder);
+
+        assert.equal(
+            orderAccount.creator.toString(),
+            user.publicKey.toString(),
+            "Order creator mismatch"
+        );
+        assert.equal(
+            orderAccount.inputMint.toString(),
+            destinationMint.toString(),
+            "Order input mint should be swap output mint"
+        );
+        assert.equal(
+            orderAccount.outputMint.toString(),
+            destinationMint.toString(),
+            "Order output mint should be same as input mint"
+        );
+        assert.equal(
+            orderAccount.inputVault.toString(),
+            orderVault.toString(),
+            "Order vault mismatch"
+        );
+        assert.equal(
+            orderAccount.userDestinationAccount.toString(),
+            userDestinationTokenAccount.toString(),
+            "User destination account mismatch"
+        );
+        assert.equal(
+            orderAccount.inputAmount.toString(),
+            orderVaultBalance.toString(),
+            "Order input amount should match vault balance"
+        );
+        assert.equal(
+            orderAccount.minOutputAmount.toString(),
+            orderMinOutputAmount.toString(),
+            "Order min output amount mismatch"
+        );
+        assert.equal(
+            orderAccount.triggerPriceBps,
+            orderTriggerPriceBps,
+            "Order trigger price BPS mismatch"
+        );
+        assert(
+            orderAccount.triggerType.takeProfit !== undefined,
+            "Order trigger type should be TakeProfit"
+        );
+        assert.equal(
+            orderAccount.expiry.toString(),
+            orderExpiry.toString(),
+            "Order expiry mismatch"
+        );
+        assert.equal(
+            orderAccount.slippageBps,
+            orderSlippageBps,
+            "Order slippage BPS mismatch"
+        );
+        assert(
+            orderAccount.status.open !== undefined,
+            "Order should be in Open status"
+        );
+    });
+
+    it("6. Stop Loss order - execute when price drops", async () => {
+        const nonce = new BN(Date.now());
+        const inputAmount = new BN(50_000_000);
+        const minOutputAmount = new BN(33_000_000); // baseline price
+        const triggerPriceBps = 500; // 5% price drop
+        const triggerType = { stopLoss: {} }; // Stop Loss order
+        const expiry = new BN(Math.floor(Date.now() / 1000) + 3600);
+        const slippageBps = 300;
+
+        // Create order
+        const [limitOrder] = PublicKey.findProgramAddressSync(
+            [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+            program.programId
+        );
+
+        const [orderVault] = PublicKey.findProgramAddressSync(
+            [Buffer.from("order_vault"), limitOrder.toBuffer()],
+            program.programId
+        );
+
+        await program.methods
+            .createLimitOrder(
+                nonce,
+                inputAmount,
+                minOutputAmount,
+                triggerPriceBps,
+                triggerType,
+                expiry,
+                slippageBps
+            )
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                userInputTokenAccount: userSourceTokenAccount,
+                userDestinationTokenAccount: userDestinationTokenAccount,
+                inputMint: sourceMint,
+                outputMint: destinationMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                outputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+            })
+            .signers([user])
+            .rpc();
+
+        // Execute order with price drop
+        const quotedOutAmount = new BN(30_738_462);
+        const platformFeeBps = 10;
+
+        const routePlan = [
+            { swap: { raydium: {} }, percent: 100, inputIndex: 0, outputIndex: 13 }
+        ];
+
+        const inputPoolVault = sourceMint.toString() < destinationMint.toString()
+            ? raydiumTokenAVault
+            : raydiumTokenBVault;
+        const outputPoolVault = sourceMint.toString() < destinationMint.toString()
+            ? raydiumTokenBVault
+            : raydiumTokenAVault;
+
+        const remainingAccounts = [
+            { pubkey: orderVault, isWritable: true, isSigner: false },
+            { pubkey: raydiumPoolInfo, isWritable: true, isSigner: false },
+            { pubkey: raydiumPoolAuthority, isWritable: false, isSigner: false },
+            { pubkey: raydiumAmmConfig, isWritable: false, isSigner: false },
+            { pubkey: raydiumPoolState, isWritable: true, isSigner: false },
+            { pubkey: inputPoolVault, isWritable: true, isSigner: false },
+            { pubkey: outputPoolVault, isWritable: true, isSigner: false },
+            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+            { pubkey: sourceMint, isWritable: false, isSigner: false },
+            { pubkey: destinationMint, isWritable: false, isSigner: false },
+            { pubkey: raydiumObservationState, isWritable: true, isSigner: false },
+            { pubkey: mockRaydiumProgramId, isWritable: false, isSigner: false },
+            { pubkey: outputVault, isWritable: true, isSigner: false },
+        ];
+
+        const initialDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
+
+        // Verify trigger logic before execution
+        const orderData = await program.account.limitOrder.fetch(limitOrder);
+        const priceRatio = quotedOutAmount.mul(new BN(10000)).div(orderData.minOutputAmount);
+        const triggerRatio = 10000 - orderData.triggerPriceBps;
+
+        assert(priceRatio.lte(new BN(triggerRatio)), "Stop loss should trigger");
+
+        await program.methods
+            .executeLimitOrder(routePlan, quotedOutAmount, platformFeeBps)
+            .accounts({
+                adapterRegistry,
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                outputTokenProgram: TOKEN_PROGRAM_ID,
+                userDestinationTokenAccount,
+                inputMint: sourceMint,
+                outputMint: destinationMint,
+                platformFeeAccount,
+                operator: operator.publicKey,
+            })
+            .remainingAccounts(remainingAccounts)
+            .signers([operator])
+            .rpc();
+
+        const finalDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
+
+        assert(finalDestBalance > initialDestBalance, "Stop loss executed - destination balance increased");
+
+        const orderAccount = await program.account.limitOrder.fetch(limitOrder);
+        assert.equal(orderAccount.status.filled !== undefined, true, "Order should be filled");
     });
 });

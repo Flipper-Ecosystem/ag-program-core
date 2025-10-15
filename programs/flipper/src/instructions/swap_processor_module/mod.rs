@@ -203,9 +203,17 @@ pub fn route<'info>(
     }
 
     // Check slippage tolerance
-    if output_amount < quoted_out_amount * (10_000 - slippage_bps as u64) / 10_000 {
-        return Err(ErrorCode::SlippageToleranceExceeded.into());
-    }
+    let min_out_amount = (quoted_out_amount as u128)
+        .checked_mul((10_000u128).checked_sub(slippage_bps as u128).unwrap())
+        .unwrap()
+        .checked_div(10_000)
+        .unwrap() as u64;
+
+    require!(
+        output_amount >= min_out_amount,
+        ErrorCode::SlippageToleranceExceeded
+    );
+
 
     // Transfer final amount from destination vault to user
     transfer_checked(
