@@ -14,7 +14,8 @@ pub mod flipper {
     pub use instructions::{
         adapter_registry_module::*,
         swap_processor_module::*,
-        vault_manager_module::*
+        vault_manager_module::*,
+        limit_orders_module::*
     };
     pub use errors::ErrorCode;
     pub use state::{
@@ -97,5 +98,79 @@ pub mod flipper {
         platform_fee_bps: u8,
     ) -> Result<u64> {
         instructions::route(ctx, route_plan, in_amount, quoted_out_amount, slippage_bps, platform_fee_bps)
+    }
+
+    // Limit Orders functions
+
+    /// Creates a new limit order
+    pub fn create_limit_order(
+        ctx: Context<CreateLimitOrder>,
+        nonce: u64,
+        input_amount: u64,
+        min_output_amount: u64,
+        trigger_price_bps: u16,
+        trigger_type: TriggerType,
+        expiry: i64,
+    ) -> Result<()> {
+        instructions::create_limit_order(
+            ctx,
+            nonce,
+            input_amount,
+            min_output_amount,
+            trigger_price_bps,
+            trigger_type,
+            expiry,
+        )
+    }
+
+    /// Executes a limit order when trigger conditions are met
+    pub fn execute_limit_order<'info>(
+        ctx: Context<'_, '_, 'info, 'info, ExecuteLimitOrder<'info>>,
+        route_plan: Vec<RoutePlanStep>,
+        quoted_out_amount: u64,
+        platform_fee_bps: u8,
+    ) -> Result<u64> {
+        instructions::execute_limit_order(
+            ctx,
+            route_plan,
+            quoted_out_amount,
+            platform_fee_bps,
+        )
+    }
+
+    /// Cancels an open limit order
+    pub fn cancel_limit_order(
+        ctx: Context<CancelLimitOrder>,
+    ) -> Result<()> {
+        instructions::cancel_limit_order(ctx)
+    }
+
+    /// Executes a swap and creates a limit order with the output
+    pub fn route_and_create_order<'info>(
+        ctx: Context<'_, '_, 'info, 'info, RouteAndCreateOrder<'info>>,
+        route_plan: Vec<RoutePlanStep>,
+        in_amount: u64,
+        quoted_out_amount: u64,
+        slippage_bps: u16,
+        platform_fee_bps: u8,
+        nonce: u64,
+        min_order_output_amount: u64,
+        trigger_price_bps: u16,
+        trigger_type: TriggerType,
+        expiry: i64,
+    ) -> Result<u64> {
+        instructions::route_and_create_order(
+            ctx,
+            route_plan,
+            in_amount,
+            quoted_out_amount,
+            slippage_bps,
+            platform_fee_bps,
+            nonce,
+            min_order_output_amount,
+            trigger_price_bps,
+            trigger_type,
+            expiry,
+        )
     }
 }

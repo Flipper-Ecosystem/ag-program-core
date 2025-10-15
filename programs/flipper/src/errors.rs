@@ -89,5 +89,31 @@ pub enum ErrorCode {
     #[msg("Order has expired")]
     OrderExpired = 6061,
     #[msg("Invalid Expiry")]
-    InvalidExpiry = 6062
+    InvalidExpiry = 6062,
+    #[msg("Order already filled")]
+    OrderAlreadyFilled,
+
+    #[msg("Order already cancelled")]
+    OrderAlreadyCancelled,
+
+    #[msg("Insufficient vault balance")]
+    InsufficientVaultBalance,
+
+    #[msg("Oracle price not within trigger range")]
+    OraclePriceNotInRange,
+
+    #[msg("Market conditions not met")]
+    MarketConditionsNotMet,
+
+    #[msg("Trigger price condition not met")]
+    TriggerPriceNotMet,
+
+    #[msg("Invalid trigger price")]
+    InvalidTriggerPrice,
+
+    #[msg("Insufficient output amount")]
+    InsufficientOutputAmount,
+
+    #[msg("Stop loss price not reached")]
+    StopLossPriceNotReached
 }

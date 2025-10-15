@@ -166,7 +166,7 @@ async function setupProgram() {
             .rpc();
 
         await waitForConfirmation(3000);
-         
+
         console.log("✅ Vault authority created\n");
 
         // Create mints
