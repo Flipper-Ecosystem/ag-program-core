@@ -771,7 +771,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             "Order vault balance should be at least expected amount after fees"
         );
 
-        
+
         const orderAccount = await program.account.limitOrder.fetch(limitOrder);
 
         assert.equal(

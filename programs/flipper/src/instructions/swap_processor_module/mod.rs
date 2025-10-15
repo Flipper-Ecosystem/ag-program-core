@@ -38,21 +38,21 @@ pub struct Route<'info> {
         constraint = user_source_token_account.mint == source_mint.key(),
         constraint = user_source_token_account.owner == user_transfer_authority.key()
     )]
-    pub user_source_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub user_source_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         mut,
         constraint = user_destination_token_account.mint == destination_mint.key(),
         constraint = user_destination_token_account.owner == user_transfer_authority.key(),
     )]
-    pub user_destination_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub user_destination_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
-
-    pub source_mint: InterfaceAccount<'info, Mint>,
-    pub destination_mint: InterfaceAccount<'info, Mint>,
+    pub source_mint: Box<InterfaceAccount<'info, Mint>>,
+    pub destination_mint: Box<InterfaceAccount<'info, Mint>>,
 
     #[account(mut)]
-    pub platform_fee_account: Option<InterfaceAccount<'info, TokenAccount>>,
+    pub platform_fee_account: Option<Box<InterfaceAccount<'info, TokenAccount>>>,
+
     pub system_program: Program<'info, System>
 }
 

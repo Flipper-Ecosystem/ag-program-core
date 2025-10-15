@@ -146,7 +146,7 @@ pub struct CreateLimitOrder<'info> {
         token::authority = vault_authority,
         token::token_program = input_token_program,
     )]
-    pub input_vault: InterfaceAccount<'info, TokenAccount>,
+    pub input_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// User's source account for input tokens
     #[account(
@@ -154,19 +154,19 @@ pub struct CreateLimitOrder<'info> {
         constraint = user_input_token_account.mint == input_mint.key(),
         constraint = user_input_token_account.owner == creator.key()
     )]
-    pub user_input_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub user_input_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// User's destination account for output tokens
     #[account(
         constraint = user_destination_token_account.mint == output_mint.key(),
         constraint = user_destination_token_account.owner == creator.key()
     )]
-    pub user_destination_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub user_destination_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Input token mint
-    pub input_mint: InterfaceAccount<'info, Mint>,
+    pub input_mint: Box<InterfaceAccount<'info, Mint>>,
     /// Output token mint
-    pub output_mint: InterfaceAccount<'info, Mint>,
+    pub output_mint: Box<InterfaceAccount<'info, Mint>>,
     /// Token program for input tokens
     pub input_token_program: Interface<'info, TokenInterface>,
     /// Token program for output tokens
@@ -293,7 +293,7 @@ pub struct ExecuteLimitOrder<'info> {
 
     /// Vault holding input tokens
     #[account(mut)]
-    pub input_vault: InterfaceAccount<'info, TokenAccount>,
+    pub input_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Token program for input tokens
     pub input_token_program: Interface<'info, TokenInterface>,
@@ -307,7 +307,7 @@ pub struct ExecuteLimitOrder<'info> {
         constraint = user_destination_token_account.mint == limit_order.output_mint,
         constraint = user_destination_token_account.owner == limit_order.creator
     )]
-    pub user_destination_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub user_destination_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Input token mint
     pub input_mint: InterfaceAccount<'info, Mint>,
@@ -617,7 +617,7 @@ pub struct RouteAndCreateOrder<'info> {
         token::authority = vault_authority,
         token::token_program = output_token_program,
     )]
-    pub input_vault: InterfaceAccount<'info, TokenAccount>,
+    pub input_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// User's source account for swap input tokens
     #[account(
@@ -625,20 +625,20 @@ pub struct RouteAndCreateOrder<'info> {
         constraint = user_input_account.mint == input_mint.key(),
         constraint = user_input_account.owner == creator.key()
     )]
-    pub user_input_account: InterfaceAccount<'info, TokenAccount>,
+    pub user_input_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// User's destination account for final order output tokens
     #[account(
         constraint = user_destination_account.mint == output_mint.key(),
         constraint = user_destination_account.owner == creator.key()
     )]
-    pub user_destination_account: InterfaceAccount<'info, TokenAccount>,
+    pub user_destination_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Swap input token mint
-    pub input_mint: InterfaceAccount<'info, Mint>,
+    pub input_mint: Box<InterfaceAccount<'info, Mint>>,
 
     /// Swap output token mint (becomes order input/output mint)
-    pub output_mint: InterfaceAccount<'info, Mint>,
+    pub output_mint: Box<InterfaceAccount<'info, Mint>>,
 
     /// Token program for swap input tokens
     pub input_token_program: Interface<'info, TokenInterface>,
@@ -648,7 +648,7 @@ pub struct RouteAndCreateOrder<'info> {
 
     /// Optional platform fee collection account
     #[account(mut)]
-    pub platform_fee_account: Option<InterfaceAccount<'info, TokenAccount>>,
+    pub platform_fee_account: Option<Box<InterfaceAccount<'info, TokenAccount>>>,
 
     /// Order creator (must sign)
     #[account(mut, signer)]
