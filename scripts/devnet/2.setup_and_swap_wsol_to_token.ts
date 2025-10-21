@@ -1,383 +1,467 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program, AnchorProvider, BN } from "@coral-xyz/anchor";
-import { Keypair, PublicKey, Connection, SystemProgram, LAMPORTS_PER_SOL, Transaction } from "@solana/web3.js";
+import { Keypair, PublicKey, Connection, SystemProgram, Transaction } from "@solana/web3.js";
 import {
     TOKEN_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
-    NATIVE_MINT,
     createMint,
     mintTo,
     getAssociatedTokenAddressSync,
-    createAssociatedTokenAccount,
-    getAccount,
-    createSyncNativeInstruction,
     getOrCreateAssociatedTokenAccount,
+    getAccount,
+    createSyncNativeInstruction
 } from "@solana/spl-token";
 import FLIPPER_IDL from "../../target/idl/flipper.json";
 import MOCK_RAYDIUM_IDL from "../../target/idl/mock_raydium.json";
 import fs from "fs";
 
-// Load keypair from file
+// Function to load or generate a keypair for the wallet
 const loadKeypair = (): Keypair => {
     const keypairPath = process.env.HOME + "/.config/solana/id.json";
     if (fs.existsSync(keypairPath)) {
         const secretKey = JSON.parse(fs.readFileSync(keypairPath, "utf8"));
         return Keypair.fromSecretKey(Uint8Array.from(secretKey));
     }
-    console.error("❌ Keypair file not found at:", keypairPath);
-    process.exit(1);
+    console.warn("Keypair file not found, generating a new one for localnet.");
+    return Keypair.generate();
 };
 
-// Connect to Solana Devnet
+// Configure connection to Solana Devnet
 const connection = new Connection("https://api.devnet.solana.com", "confirmed");
+
+// Create wallet and provider for Anchor
 const wallet = new anchor.Wallet(loadKeypair());
-const provider = new AnchorProvider(connection, wallet, { commitment: "confirmed" });
+const provider = new AnchorProvider(connection, wallet, {
+    commitment: "confirmed",
+});
 anchor.setProvider(provider);
 
 // Load programs
 const flipperProgram = new Program(FLIPPER_IDL, provider);
 const mockRaydiumProgram = new Program(MOCK_RAYDIUM_IDL, provider);
 
-// Wait for transaction confirmation
-const waitForConfirmation = (ms: number = 2000) => new Promise(resolve => setTimeout(resolve, ms));
+// Shared variables
+let admin: Keypair;
+let user: Keypair;
+let treasury: Keypair;
+let vaultAuthority: PublicKey;
+let vaultAuthorityBump: number;
+let adapterRegistry: PublicKey;
+let adapterRegistryBump: number;
+let sourceMint: PublicKey;
+let destinationMint: PublicKey;
+let userSourceTokenAccount: PublicKey;
+let userDestinationTokenAccount: PublicKey;
+let inputVault: PublicKey;
+let outputVault: PublicKey;
+let platformFeeAccount: PublicKey;
+let mockRaydiumProgramId: PublicKey;
+let raydiumPoolInfo: PublicKey;
+let raydiumAmmConfig: PublicKey;
+let raydiumPoolState: PublicKey;
+let raydiumPoolAuthority: PublicKey;
+let raydiumTokenAVault: PublicKey;
+let raydiumTokenBVault: PublicKey;
+let raydiumObservationState: PublicKey;
 
-// Get swap type bytes for Raydium
+const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
+
+// Helper function for swapType bytes
 function getSwapTypeBytes(swapType: any): Buffer {
     const bytes = Buffer.alloc(32, 0);
     if ("raydium" in swapType) bytes[0] = 7;
+    else if ("whirlpool" in swapType) {
+        bytes[0] = 17;
+        bytes[1] = swapType.whirlpool.aToB ? 1 : 0;
+    } else if ("meteora" in swapType) bytes[0] = 8;
     return bytes;
 }
 
-// Helper function to wrap SOL to WSOL
-async function wrapSol(
-    connection: Connection,
-    payer: Keypair,
-    wsolAccount: PublicKey,
-    amountInSol: number
-): Promise<string> {
-    const lamports = amountInSol * LAMPORTS_PER_SOL;
-
-    const tx = new Transaction().add(
-        // Transfer SOL to WSOL account
-        SystemProgram.transfer({
-            fromPubkey: payer.publicKey,
-            toPubkey: wsolAccount,
-            lamports,
-        }),
-        // Sync native to update WSOL balance
-        createSyncNativeInstruction(wsolAccount)
-    );
-
-    const signature = await provider.sendAndConfirm(tx, [payer]);
-    return signature;
+// Wait for transaction confirmation
+async function waitForConfirmation(ms: number = 2000) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function setupPoolAndSwap() {
+// Function to fund a token account (mint or wrap SOL for wSOL)
+async function fundTokenAccount(mint: PublicKey, destination: PublicKey, payer: Keypair, amount: BN) {
+    if (mint.equals(WSOL_MINT)) {
+        const tx = new Transaction().add(
+            SystemProgram.transfer({
+                fromPubkey: payer.publicKey,
+                toPubkey: destination,
+                lamports: Number(amount),
+            }),
+            createSyncNativeInstruction(destination)
+        );
+        await provider.sendAndConfirm(tx, [payer]);
+    } else {
+        await mintTo(connection, payer, mint, destination, payer.publicKey, amount);
+    }
+    await waitForConfirmation(3000);
+}
+
+async function setupProgram() {
     try {
-        console.log("🚀 Starting Raydium Pool Setup with WSOL and New Token\n");
+        console.log("🚀 Starting Flipper Swap Protocol setup on Devnet...\n");
 
-        const payer = wallet.payer;
-        const user = Keypair.generate();
+        admin = wallet.payer;
+        user = Keypair.generate();
+        treasury = Keypair.generate();
 
-        console.log("📍 Addresses:");
-        console.log("   Payer:", payer.publicKey.toBase58());
+        console.log("📍 Wallet addresses:");
+        console.log("   Admin:", admin.publicKey.toBase58());
         console.log("   User:", user.publicKey.toBase58());
+        console.log("   Treasury:", treasury.publicKey.toBase58(), "\n");
 
-        // Check payer balance
-        const payerBalance = await connection.getBalance(payer.publicKey);
-        console.log("💰 Payer balance:", payerBalance / LAMPORTS_PER_SOL, "SOL\n");
+        // Check admin balance
+        const adminBalance = await connection.getBalance(admin.publicKey);
+        console.log("💰 Admin balance:", adminBalance / 1e9, "SOL");
 
-        if (payerBalance < 0.5 * LAMPORTS_PER_SOL) {
-            console.error("❌ Insufficient payer balance. Need at least 0.5 SOL");
+        if (adminBalance < 3_000_000_000) { // Minimum 3 SOL
+            console.error("❌ Insufficient admin balance. Need at least 3 SOL");
+            console.log("   Run: solana airdrop 5 --url devnet");
             process.exit(1);
         }
 
-        // Transfer SOL to user (reduced from 2 to 0.3 SOL)
-        console.log("💸 Transferring SOL to user...");
-        const transferTx = new Transaction().add(
+        // Transfer SOL to user and treasury
+        console.log("\n💸 Transferring SOL to user and treasury...");
+
+        // Transfer 1 SOL to user
+        const transferToUserTx = new Transaction().add(
             SystemProgram.transfer({
-                fromPubkey: payer.publicKey,
+                fromPubkey: admin.publicKey,
                 toPubkey: user.publicKey,
-                lamports: 0.3 * LAMPORTS_PER_SOL, // Send 0.3 SOL to user
+                lamports: 1_000_000_000, // 1 SOL
             })
         );
-        await provider.sendAndConfirm(transferTx, [payer]);
+        await provider.sendAndConfirm(transferToUserTx, [wallet.payer]);
+        console.log("✅ Transferred 1 SOL to user");
+
         await waitForConfirmation(2000);
 
-        const userBalance = await connection.getBalance(user.publicKey);
-        console.log("✅ User received:", userBalance / LAMPORTS_PER_SOL, "SOL\n");
+        // Transfer 0.5 SOL to treasury
+        const transferToTreasuryTx = new Transaction().add(
+            SystemProgram.transfer({
+                fromPubkey: admin.publicKey,
+                toPubkey: treasury.publicKey,
+                lamports: 500_000_000, // 0.5 SOL
+            })
+        );
+        await provider.sendAndConfirm(transferToTreasuryTx, [wallet.payer]);
+        console.log("✅ Transferred 0.5 SOL to treasury");
 
-        // ===== 1. Create new token mint =====
-        console.log("🪙 Creating new token mint...");
-        const newTokenMint = await createMint(
+        await waitForConfirmation(2000);
+
+        // Check balances
+        const userBalance = await connection.getBalance(user.publicKey);
+        const treasuryBalance = await connection.getBalance(treasury.publicKey);
+        console.log(`   User balance: ${userBalance / 1e9} SOL`);
+        console.log(`   Treasury balance: ${treasuryBalance / 1e9} SOL\n`);
+
+        // Derive PDAs
+        [vaultAuthority, vaultAuthorityBump] = PublicKey.findProgramAddressSync(
+            [Buffer.from("vault_authority")],
+            flipperProgram.programId
+        );
+
+        [adapterRegistry, adapterRegistryBump] = PublicKey.findProgramAddressSync(
+            [Buffer.from("adapter_registry")],
+            flipperProgram.programId
+        );
+
+        // Create vault authority
+        console.log("🔧 Creating vault authority...");
+        await flipperProgram.methods
+            .createVaultAuthority()
+            .accounts({
+                vaultAuthority,
+                payer: wallet.publicKey,
+                admin: admin.publicKey,
+                systemProgram: SystemProgram.programId,
+            })
+            .signers([wallet.payer])
+            .rpc();
+
+        await waitForConfirmation(3000);
+
+        console.log("✅ Vault authority created\n");
+
+        // Create mints
+        console.log("🪙 Creating token mints...");
+        destinationMint = await createMint(
             connection,
-            payer,
-            payer.publicKey,
+            wallet.payer,
+            wallet.publicKey,
             null,
             9,
             undefined,
             undefined,
             TOKEN_PROGRAM_ID
         );
+
         await waitForConfirmation(3000);
-        console.log("   New Token Mint:", newTokenMint.toBase58(), "\n");
 
-        // ===== 2. Create token accounts for user =====
+        sourceMint = WSOL_MINT;
+
+        console.log("   Source Mint (wSOL):", sourceMint.toBase58());
+        console.log("   Destination Mint (custom):", destinationMint.toBase58(), "\n");
+
+        // Derive vault addresses
+        [inputVault] = PublicKey.findProgramAddressSync(
+            [Buffer.from("vault"), sourceMint.toBuffer()],
+            flipperProgram.programId
+        );
+        [outputVault] = PublicKey.findProgramAddressSync(
+            [Buffer.from("vault"), destinationMint.toBuffer()],
+            flipperProgram.programId
+        );
+
+        // Create vaults
+        console.log("🏦 Creating token vaults...");
+        for (const [vault, mint, name] of [
+            [inputVault, sourceMint, "Input"],
+            [outputVault, destinationMint, "Output"]
+        ]) {
+            await flipperProgram.methods
+                .createVault()
+                .accounts({
+                    vaultAuthority,
+                    payer: wallet.publicKey,
+                    admin: admin.publicKey,
+                    vault,
+                    vaultMint: mint,
+                    vaultTokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([wallet.payer])
+                .rpc();
+
+            await waitForConfirmation(3000);
+            console.log(`   ✅ ${name} vault created`);
+        }
+        console.log();
+
+        // Create user token accounts
         console.log("👤 Creating user token accounts...");
-
-        // WSOL account (Native SOL wrapped)
-        const userWsolAccount = await createAssociatedTokenAccount(
+        userSourceTokenAccount = (await getOrCreateAssociatedTokenAccount(
             connection,
             user,
-            NATIVE_MINT,
+            sourceMint,
             user.publicKey,
+            true,
+            undefined,
             undefined,
             TOKEN_PROGRAM_ID,
-            undefined
-        );
-        await waitForConfirmation(2000);
+            ASSOCIATED_TOKEN_PROGRAM_ID
+        )).address;
 
-        // New Token account
-        const userNewTokenAccount = await createAssociatedTokenAccount(
+        await waitForConfirmation(3000);
+
+        userDestinationTokenAccount = (await getOrCreateAssociatedTokenAccount(
             connection,
             user,
-            newTokenMint,
+            destinationMint,
             user.publicKey,
+            false,
+            undefined,
             undefined,
             TOKEN_PROGRAM_ID,
-            undefined
-        );
-        await waitForConfirmation(2000);
+            ASSOCIATED_TOKEN_PROGRAM_ID
+        )).address;
+
+        await waitForConfirmation(3000);
         console.log("✅ User token accounts created\n");
 
-        // ===== 3. Wrap SOL to WSOL for user (reduced from 1 to 0.1 SOL) =====
-        console.log("🔄 Wrapping SOL to WSOL for user...");
-        await wrapSol(connection, user, userWsolAccount, 0.1); // Wrap 0.1 SOL
-        await waitForConfirmation(2000);
+        // Mint/fund tokens to user and vaults
+        console.log("🎁 Funding tokens...");
+        const userFundAmount = new BN(100_000_000); // 0.1 SOL
+        const vaultFundAmount = new BN(100_000_000); // 0.1 SOL
 
-        const userWsolBalance = (await getAccount(connection, userWsolAccount)).amount;
-        console.log("✅ User WSOL balance:", userWsolBalance.toString(), "\n");
+        await fundTokenAccount(sourceMint, userSourceTokenAccount, wallet.payer, userFundAmount);
+        await fundTokenAccount(sourceMint, inputVault, wallet.payer, vaultFundAmount);
+        await fundTokenAccount(destinationMint, outputVault, wallet.payer, vaultFundAmount);
+        console.log("✅ Tokens funded\n");
 
-        // ===== 4. Mint new tokens to user =====
-        console.log("🎁 Minting new tokens to user...");
-        await mintTo(
+        // Create platform fee account
+        const tokenAccount = await getOrCreateAssociatedTokenAccount(
             connection,
-            payer,
-            newTokenMint,
-            userNewTokenAccount,
-            payer.publicKey,
-            10_000_000_000_000 // 10,000 tokens
+            wallet.payer,
+            destinationMint,
+            vaultAuthority,
+            false,
+            undefined,
+            undefined,
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID
         );
+
         await waitForConfirmation(3000);
-        console.log("✅ Minted 10,000 new tokens\n");
+        platformFeeAccount = tokenAccount.address;
 
-        // ===== 5. Setup Raydium Pool =====
+        // Setup mock Raydium
+        mockRaydiumProgramId = mockRaydiumProgram.programId;
+        raydiumAmmConfig = Keypair.generate().publicKey;
+
+        // Initialize adapter registry
+        console.log("⚙️ Initializing adapter registry...");
+        await flipperProgram.methods
+            .initializeAdapterRegistry([], [])
+            .accounts({
+                adapterRegistry,
+                payer: wallet.publicKey,
+                operator: wallet.publicKey,
+                systemProgram: SystemProgram.programId,
+            })
+            .signers([wallet.payer])
+            .rpc();
+        await waitForConfirmation(3000);
+        console.log("✅ Adapter registry initialized\n");
+
+        // Configure Raydium adapter
+        console.log("🔌 Configuring Raydium adapter...");
+        await flipperProgram.methods
+            .configureAdapter({
+                name: "raydium",
+                programId: mockRaydiumProgramId,
+                swapType: { raydium: {} }
+            })
+            .accounts({ adapterRegistry, operator: wallet.publicKey })
+            .signers([wallet.payer])
+            .rpc();
+        await waitForConfirmation(3000);
+        console.log("✅ Raydium adapter configured\n");
+
+        // Setup Raydium pool
         console.log("🏊 Setting up Raydium pool...");
+        const tokenAMint = sourceMint; // wSOL
+        const tokenBMint = destinationMint; // Custom token
 
-        const mockRaydiumProgramId = mockRaydiumProgram.programId;
-
-        // EXPLICITLY set WSOL as Token A, new token as Token B (NO SORTING)
-        const tokenAMint = NATIVE_MINT; // WSOL is always Token A
-        const tokenBMint = newTokenMint; // New token is always Token B
-
-        console.log("   Token A (WSOL):", tokenAMint.toBase58());
-        console.log("   Token B (New Token):", tokenBMint.toBase58(), "\n");
-
-        // Derive pool PDAs
-        const [raydiumPoolState] = PublicKey.findProgramAddressSync(
+        [raydiumPoolState] = PublicKey.findProgramAddressSync(
             [Buffer.from("pool_state"), tokenAMint.toBuffer(), tokenBMint.toBuffer()],
             mockRaydiumProgramId
         );
-
-        const [raydiumPoolAuthority] = PublicKey.findProgramAddressSync(
+        [raydiumPoolAuthority] = PublicKey.findProgramAddressSync(
             [Buffer.from("vault_and_lp_mint_auth_seed")],
             mockRaydiumProgramId
         );
 
-        console.log("   Pool State:", raydiumPoolState.toBase58());
-        console.log("   Pool Authority (PDA):", raydiumPoolAuthority.toBase58(), "\n");
-
-        // Create payer token accounts first (for adding liquidity)
-        console.log("💧 Creating payer token accounts for liquidity...");
-
-        // For WSOL (Token A) - use getOrCreateAssociatedTokenAccount
-        const payerWsolAccountInfo = await getOrCreateAssociatedTokenAccount(
-            connection,
-            payer,
-            NATIVE_MINT,
-            payer.publicKey,
-            false, // allowOwnerOffCurve
-            undefined, // commitment
-            undefined, // confirmOptions
-            TOKEN_PROGRAM_ID,
-            ASSOCIATED_TOKEN_PROGRAM_ID
-        );
-        const payerTokenAAccount = payerWsolAccountInfo.address; // WSOL = Token A
-        await waitForConfirmation(2000);
-
-        // For new token (Token B)
-        const payerTokenBAccount = await createAssociatedTokenAccount(
-            connection,
-            payer,
-            newTokenMint,
-            payer.publicKey,
-            undefined,
-            TOKEN_PROGRAM_ID,
-            undefined
-        );
-        await waitForConfirmation(2000);
-
-        console.log("✅ Payer token accounts created\n");
-
-        // Add liquidity to payer accounts (reduced from 1 SOL to 0.5 SOL)
-        console.log("💰 Funding payer accounts...");
-
-        // Fund Token A (WSOL) - reduced from 1 to 0.5 SOL
-        await wrapSol(connection, payer, payerTokenAAccount, 0.5); // Wrap 0.5 SOL
-        await waitForConfirmation(2000);
-        console.log("✅ Wrapped 0.5 SOL to WSOL (Token A)");
-
-        // Fund Token B (New Token) - reduced from 1,000 to 500 tokens
-        await mintTo(connection, payer, tokenBMint, payerTokenBAccount, payer.publicKey, 500_000_000_000); // 500 tokens
-        await waitForConfirmation(2000);
-        console.log("✅ Minted 500 new tokens (Token B)");
-
-        console.log();
-
-        // Get vault addresses (they will be created by the initialize_pool instruction)
-        const raydiumTokenAVault = getAssociatedTokenAddressSync(
+        raydiumTokenAVault = getAssociatedTokenAddressSync(
             tokenAMint,
             raydiumPoolAuthority,
-            true, // allowOwnerOffCurve = true for PDA
+            true,
             TOKEN_PROGRAM_ID,
             ASSOCIATED_TOKEN_PROGRAM_ID
         );
 
-        const raydiumTokenBVault = getAssociatedTokenAddressSync(
+        await waitForConfirmation(3000);
+        raydiumTokenBVault = getAssociatedTokenAddressSync(
             tokenBMint,
             raydiumPoolAuthority,
-            true, // allowOwnerOffCurve = true for PDA
+            true,
             TOKEN_PROGRAM_ID,
             ASSOCIATED_TOKEN_PROGRAM_ID
         );
 
-        const raydiumObservationState = Keypair.generate().publicKey;
+        await waitForConfirmation(3000);
+        raydiumObservationState = Keypair.generate().publicKey;
 
-        // Initialize Raydium pool (reduced liquidity: 0.5 SOL and 500 tokens)
-        console.log("⚙️ Initializing Raydium pool...");
+        // Create user token accounts for pool
+        const userTokenAAccount = (await getOrCreateAssociatedTokenAccount(
+            connection,
+            wallet.payer,
+            tokenAMint,
+            wallet.publicKey,
+            true,
+            undefined,
+            undefined,
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+        )).address;
+
+        await waitForConfirmation(3000);
+        const userTokenBAccount = (await getOrCreateAssociatedTokenAccount(
+            connection,
+            wallet.payer,
+            tokenBMint,
+            wallet.publicKey,
+            false,
+            undefined,
+            undefined,
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+        )).address;
+
+        await waitForConfirmation(3000);
+
+        // Mint/fund tokens to pool accounts
+        const poolFundAmount = new BN(100_000_000); // 0.1 SOL or tokens
+        await fundTokenAccount(tokenAMint, userTokenAAccount, wallet.payer, poolFundAmount);
+        await fundTokenAccount(tokenBMint, userTokenBAccount, wallet.payer, poolFundAmount);
+
+        // Initialize Raydium pool
         await mockRaydiumProgram.methods
-            .initializePool(new BN(500_000_000), new BN(500_000_000_000)) // 0.5 WSOL and 500 tokens
+            .initializePool(new BN(100_000_000), new BN(100_000_000))
             .accounts({
-                user: payer.publicKey,
+                user: wallet.publicKey,
                 poolState: raydiumPoolState,
                 authority: raydiumPoolAuthority,
-                userTokenA: payerTokenAAccount,
-                userTokenB: payerTokenBAccount,
+                userTokenA: userTokenAAccount,
+                userTokenB: userTokenBAccount,
                 tokenAVault: raydiumTokenAVault,
                 tokenBVault: raydiumTokenBVault,
-                tokenAMint,
-                tokenBMint,
+                tokenAMint: tokenAMint,
+                tokenBMint: tokenBMint,
                 tokenAProgram: TOKEN_PROGRAM_ID,
                 tokenBProgram: TOKEN_PROGRAM_ID,
                 associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                 systemProgram: SystemProgram.programId,
             })
-            .signers([payer])
+            .signers([wallet.payer])
             .rpc();
         await waitForConfirmation(3000);
-        console.log("✅ Raydium pool initialized");
-        console.log("   Pool: 0.5 WSOL (Token A) ↔ 500 New Token (Token B)\n");
+        console.log("✅ Raydium pool initialized\n");
 
-        // ===== 6. Initialize Pool Info in Flipper =====
-        const [vaultAuthority] = PublicKey.findProgramAddressSync(
-            [Buffer.from("vault_authority")],
-            flipperProgram.programId
-        );
-
-        const [adapterRegistry] = PublicKey.findProgramAddressSync(
-            [Buffer.from("adapter_registry")],
-            flipperProgram.programId
-        );
-
-        const [raydiumPoolInfo] = PublicKey.findProgramAddressSync(
+        // Initialize pool info
+        [raydiumPoolInfo] = PublicKey.findProgramAddressSync(
             [Buffer.from("pool_info"), getSwapTypeBytes({ raydium: {} }), raydiumPoolState.toBuffer()],
             flipperProgram.programId
         );
-
-        console.log("⚙️ Initializing pool info in Flipper...");
         await flipperProgram.methods
             .initializePoolInfo({ raydium: {} }, raydiumPoolState)
             .accounts({
                 poolInfo: raydiumPoolInfo,
                 adapterRegistry,
-                payer: payer.publicKey,
-                operator: payer.publicKey,
+                payer: wallet.publicKey,
+                operator: wallet.publicKey,
                 systemProgram: SystemProgram.programId,
             })
-            .signers([payer])
+            .signers([wallet.payer])
             .rpc();
         await waitForConfirmation(3000);
         console.log("✅ Pool info initialized\n");
 
-        // ===== 7. Create Platform Fee Account =====
-        console.log("💼 Creating platform fee account...");
+        console.log("🎉 Setup completed successfully!\n");
+    } catch (error) {
+        console.error("❌ Error during setup:", error);
+        throw error;
+    }
+}
 
-        const platformFeeAccount = getAssociatedTokenAddressSync(
-            newTokenMint,
-            vaultAuthority,
-            true, // allowOwnerOffCurve = true for PDA
-            TOKEN_PROGRAM_ID,
-            ASSOCIATED_TOKEN_PROGRAM_ID
-        );
+async function executeSwap() {
+    try {
+        console.log("🔄 Executing single-hop swap with Raydium adapter (wSOL to custom token)...\n");
 
-        // Create the platform fee account using getOrCreateAssociatedTokenAccount
-        await getOrCreateAssociatedTokenAccount(
-            connection,
-            payer,
-            newTokenMint,
-            vaultAuthority,
-            true, // allowOwnerOffCurve = true for PDA
-            undefined,
-            undefined,
-            TOKEN_PROGRAM_ID,
-            ASSOCIATED_TOKEN_PROGRAM_ID
-        );
-        await waitForConfirmation(2000);
-        console.log("✅ Platform fee account created:", platformFeeAccount.toBase58(), "\n");
-
-        // ===== 8. Execute Swap =====
-        console.log("🔄 Executing swap: WSOL → New Token\n");
-
-        const [inputVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("vault"), NATIVE_MINT.toBuffer()],
-            flipperProgram.programId
-        );
-
-        const [outputVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("vault"), newTokenMint.toBuffer()],
-            flipperProgram.programId
-        );
-
-        // Reduced swap amount from 0.1 to 0.01 WSOL
-        const inAmount = new BN(10_000_000); // 0.01 WSOL
-        const quotedOutAmount = new BN(9_000_000); // Expected ~9 tokens (with slippage)
-        const slippageBps = 100;
+        const inAmount = new BN(10_000_000); // 0.01 SOL
+        const quotedOutAmount = new BN(9_000_000); // Expected output, adjusted for slippage
+        const slippageBps = 100; // 1% slippage
         const platformFeeBps = 0;
 
         const routePlan = [
             { swap: { raydium: {} }, percent: 100, inputIndex: 0, outputIndex: 13 }
         ];
 
-        // Since WSOL is Token A and New Token is Token B:
-        // Swapping WSOL → New Token means: Token A vault → Token B vault
-        const inputPoolVault = raydiumTokenAVault;  // WSOL vault
-        const outputPoolVault = raydiumTokenBVault; // New Token vault
-
-        console.log("   Input (WSOL) vault:", inputPoolVault.toBase58());
-        console.log("   Output (New Token) vault:", outputPoolVault.toBase58());
-        console.log("   Swap amount: 0.01 WSOL\n");
-
-        const raydiumAmmConfig = Keypair.generate().publicKey;
+        const inputPoolVault = raydiumTokenAVault; // wSOL vault
+        const outputPoolVault = raydiumTokenBVault; // Custom token vault
 
         const remainingAccounts = [
             { pubkey: inputVault, isWritable: true, isSigner: false },
@@ -389,20 +473,20 @@ async function setupPoolAndSwap() {
             { pubkey: outputPoolVault, isWritable: true, isSigner: false },
             { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
             { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
-            { pubkey: NATIVE_MINT, isWritable: false, isSigner: false },
-            { pubkey: newTokenMint, isWritable: false, isSigner: false },
+            { pubkey: sourceMint, isWritable: false, isSigner: false },
+            { pubkey: destinationMint, isWritable: false, isSigner: false },
             { pubkey: raydiumObservationState, isWritable: true, isSigner: false },
             { pubkey: mockRaydiumProgramId, isWritable: false, isSigner: false },
             { pubkey: outputVault, isWritable: true, isSigner: false },
         ];
 
         // Get initial balances
-        const initialWsol = (await getAccount(connection, userWsolAccount)).amount;
-        const initialNewToken = (await getAccount(connection, userNewTokenAccount)).amount;
+        const initialSource = (await getAccount(connection, userSourceTokenAccount)).amount;
+        const initialDest = (await getAccount(connection, userDestinationTokenAccount)).amount;
 
         console.log("📊 Initial balances:");
-        console.log("   WSOL:", initialWsol.toString());
-        console.log("   New Token:", initialNewToken.toString(), "\n");
+        console.log("   Source (wSOL):", initialSource.toString());
+        console.log("   Destination (custom):", initialDest.toString(), "\n");
 
         // Execute swap
         console.log("⚡ Executing swap transaction...");
@@ -414,10 +498,10 @@ async function setupPoolAndSwap() {
                 inputTokenProgram: TOKEN_PROGRAM_ID,
                 outputTokenProgram: TOKEN_PROGRAM_ID,
                 userTransferAuthority: user.publicKey,
-                userSourceTokenAccount: userWsolAccount,
-                userDestinationTokenAccount: userNewTokenAccount,
-                sourceMint: NATIVE_MINT,
-                destinationMint: newTokenMint,
+                userSourceTokenAccount,
+                userDestinationTokenAccount,
+                sourceMint,
+                destinationMint,
                 platformFeeAccount,
                 systemProgram: SystemProgram.programId
             })
@@ -426,31 +510,43 @@ async function setupPoolAndSwap() {
             .rpc();
 
         await waitForConfirmation(3000);
-        console.log("✅ Swap completed! Signature:", txSignature, "\n");
+
+        console.log("✅ Swap transaction signature:", txSignature, "\n");
 
         // Get final balances
-        const finalWsol = (await getAccount(connection, userWsolAccount)).amount;
-        const finalNewToken = (await getAccount(connection, userNewTokenAccount)).amount;
+        const finalSource = (await getAccount(connection, userSourceTokenAccount)).amount;
+        const finalDest = (await getAccount(connection, userDestinationTokenAccount)).amount;
 
         console.log("📊 Final balances:");
-        console.log("   WSOL:", finalWsol.toString());
-        console.log("   New Token:", finalNewToken.toString(), "\n");
+        console.log("   Source (wSOL):", finalSource.toString());
+        console.log("   Destination (custom):", finalDest.toString(), "\n");
+
+        // Calculate expected values
+        const inAmountBN = BigInt(inAmount.toString());
+        const minOutAmount = quotedOutAmount.mul(new BN(10000 - slippageBps)).div(new BN(10000));
+        const expectedOutAmount = BigInt(minOutAmount.toString());
 
         console.log("✨ Swap results:");
-        console.log("   Spent WSOL:", (initialWsol - finalWsol).toString());
-        console.log("   Received New Token:", (finalNewToken - initialNewToken).toString());
-        console.log("\n✅ All operations completed successfully!");
+        console.log("   Spent:", (initialSource - finalSource).toString());
+        console.log("   Received:", (finalDest - initialDest).toString());
+        console.log("   Expected min:", expectedOutAmount.toString());
 
+        if (finalSource === (initialSource - inAmountBN) && finalDest > (initialDest + expectedOutAmount)) {
+            console.log("\n✅ Swap completed successfully!");
+        } else {
+            console.log("\n⚠️ Swap completed but balances don't match expectations");
+        }
     } catch (error) {
-        console.error("❌ Error:", error);
+        console.error("❌ Error during swap execution:", error);
         throw error;
     }
 }
 
-// Run the script
+// Main execution
 (async () => {
     try {
-        await setupPoolAndSwap();
+        await setupProgram();
+        await executeSwap();
     } catch (error) {
         console.error("Fatal error:", error);
         process.exit(1);
