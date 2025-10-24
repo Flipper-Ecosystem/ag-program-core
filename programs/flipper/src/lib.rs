@@ -6,7 +6,7 @@ pub mod instructions;
 pub mod errors;
 pub mod state;
 
-declare_id!("DEmNWvQ6d5XrhUbeysVRiesSsnLyJNzAXm3mmExc2Sy6");
+declare_id!("5958qddzZjU34CHUD4bisVBiYgDQ6EREwBLgpbVaSLX7");
 
 #[program]
 pub mod flipper {

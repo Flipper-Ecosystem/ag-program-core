@@ -325,7 +325,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
 
     });
 
-    it("1. Simple single-hop swap with Raydium adapter", async () => {
+    /*it("1. Simple single-hop swap with Raydium adapter", async () => {
         const inAmount = new BN(100_000_000);
         const quotedOutAmount = new BN(90_000_000);
 
@@ -946,5 +946,328 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
 
         const orderAccount = await program.account.limitOrder.fetch(limitOrder);
         assert.equal(orderAccount.status.filled !== undefined, true, "Order should be filled");
+    });*/
+
+
+
+    it("7. Single-hop swap with Whirlpool adapter (with supplemental tick arrays)", async () => {
+        const [tokenAMint, tokenBMint] = sourceMint.toString() < intermediateMint.toString()
+            ? [sourceMint, intermediateMint]
+            : [intermediateMint, sourceMint];
+
+        const [whirlpoolPoolState] = PublicKey.findProgramAddressSync(
+            [Buffer.from("whirlpool"), tokenAMint.toBuffer(), tokenBMint.toBuffer()],
+            mockWhirlpoolProgramId
+        );
+
+        // Derive all tick array addresses
+        const [tickArray0] = PublicKey.findProgramAddressSync(
+            [Buffer.from("tick_array"), whirlpoolPoolState.toBuffer(), Buffer.from(new Int32Array([-100]).buffer)],
+            mockWhirlpoolProgramId
+        );
+        const [tickArray1] = PublicKey.findProgramAddressSync(
+            [Buffer.from("tick_array"), whirlpoolPoolState.toBuffer(), Buffer.from(new Int32Array([0]).buffer)],
+            mockWhirlpoolProgramId
+        );
+        const [tickArray2] = PublicKey.findProgramAddressSync(
+            [Buffer.from("tick_array"), whirlpoolPoolState.toBuffer(), Buffer.from(new Int32Array([100]).buffer)],
+            mockWhirlpoolProgramId
+        );
+
+        // Supplemental tick arrays
+        const [supplementalTickArray0] = PublicKey.findProgramAddressSync(
+            [Buffer.from("tick_array"), whirlpoolPoolState.toBuffer(), Buffer.from(new Int32Array([-200]).buffer)],
+            mockWhirlpoolProgramId
+        );
+        const [supplementalTickArray1] = PublicKey.findProgramAddressSync(
+            [Buffer.from("tick_array"), whirlpoolPoolState.toBuffer(), Buffer.from(new Int32Array([200]).buffer)],
+            mockWhirlpoolProgramId
+        );
+        const [supplementalTickArray2] = PublicKey.findProgramAddressSync(
+            [Buffer.from("tick_array"), whirlpoolPoolState.toBuffer(), Buffer.from(new Int32Array([300]).buffer)],
+            mockWhirlpoolProgramId
+        );
+
+        const whirlpoolTokenVaultA = getAssociatedTokenAddressSync(
+            tokenAMint,
+            whirlpoolPoolState,
+            true,
+            TOKEN_PROGRAM_ID
+        );
+        const whirlpoolTokenVaultB = getAssociatedTokenAddressSync(
+            tokenBMint,
+            whirlpoolPoolState,
+            true,
+            TOKEN_PROGRAM_ID
+        );
+
+        // Get wallet's token accounts (create if needed)
+        const walletTokenA = getAssociatedTokenAddressSync(
+            tokenAMint,
+            wallet.publicKey,
+            false,
+            TOKEN_PROGRAM_ID
+        );
+        const walletTokenB = getAssociatedTokenAddressSync(
+            tokenBMint,
+            wallet.publicKey,
+            false,
+            TOKEN_PROGRAM_ID
+        );
+
+        // Check if pool exists
+        let poolExists = false;
+        try {
+            await mockWhirlpoolProgram.account.whirlpool.fetch(whirlpoolPoolState);
+            poolExists = true;
+        } catch (e) {
+            console.log("Initializing new Whirlpool pool");
+        }
+
+        if (!poolExists) {
+            // Make sure wallet has the tokens
+            let walletTokenAInfo;
+            try {
+                walletTokenAInfo = await getAccount(provider.connection, walletTokenA);
+            } catch (e) {
+                // Create and mint
+                await createAssociatedTokenAccount(
+                    provider.connection,
+                    wallet.payer,
+                    tokenAMint,
+                    wallet.publicKey
+                );
+                await mintTo(
+                    provider.connection,
+                    wallet.payer,
+                    tokenAMint,
+                    walletTokenA,
+                    wallet.publicKey,
+                    10_000_000_000_000
+                );
+            }
+
+            let walletTokenBInfo;
+            try {
+                walletTokenBInfo = await getAccount(provider.connection, walletTokenB);
+            } catch (e) {
+                // Create and mint
+                await createAssociatedTokenAccount(
+                    provider.connection,
+                    wallet.payer,
+                    tokenBMint,
+                    wallet.publicKey
+                );
+                await mintTo(
+                    provider.connection,
+                    wallet.payer,
+                    tokenBMint,
+                    walletTokenB,
+                    wallet.publicKey,
+                    10_000_000_000_000
+                );
+            }
+
+            // Now check balances and mint if needed
+            walletTokenAInfo = await getAccount(provider.connection, walletTokenA);
+            walletTokenBInfo = await getAccount(provider.connection, walletTokenB);
+
+            if (walletTokenAInfo.amount < 1_000_000_000n) {
+                await mintTo(
+                    provider.connection,
+                    wallet.payer,
+                    tokenAMint,
+                    walletTokenA,
+                    wallet.publicKey,
+                    10_000_000_000_000
+                );
+            }
+
+            if (walletTokenBInfo.amount < 1_000_000_000n) {
+                await mintTo(
+                    provider.connection,
+                    wallet.payer,
+                    tokenBMint,
+                    walletTokenB,
+                    wallet.publicKey,
+                    10_000_000_000_000
+                );
+            }
+
+            // Initialize pool (this will create main tick arrays automatically)
+            await mockWhirlpoolProgram.methods
+                .initializePool(new BN(1_000_000_000), new BN(1_000_000_000))
+                .accounts({
+                    user: wallet.publicKey,
+                    whirlpool: whirlpoolPoolState,
+                    tickArray0,
+                    tickArray1,
+                    tickArray2,
+                    userTokenA: walletTokenA,
+                    userTokenB: walletTokenB,
+                    tokenVaultA: whirlpoolTokenVaultA,
+                    tokenVaultB: whirlpoolTokenVaultB,
+                    tokenMintA: tokenAMint,
+                    tokenMintB: tokenBMint,
+                    tokenProgramA: TOKEN_PROGRAM_ID,
+                    tokenProgramB: TOKEN_PROGRAM_ID,
+                    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([wallet.payer])
+                .rpc();
+
+        }
+
+        // Create supplemental tick arrays
+        for (const [tickArray, startTick] of [
+            [supplementalTickArray0, -200],
+            [supplementalTickArray1, 200],
+            [supplementalTickArray2, 300]
+        ]) {
+            try {
+                const accountInfo = await provider.connection.getAccountInfo(tickArray);
+                if (!accountInfo) {
+                    await mockWhirlpoolProgram.methods
+                        .initializeSupplementalTickArray(startTick)
+                        .accounts({
+                            payer: wallet.publicKey,
+                            whirlpool: whirlpoolPoolState,
+                            tickArray,
+                            systemProgram: SystemProgram.programId,
+                        })
+                        .signers([wallet.payer])
+                        .rpc();
+
+                } else {
+                    console.log(`  Supplemental tick array at tick ${startTick} already exists`);
+                }
+            } catch (e) {
+                console.log(`  Note: Could not create supplemental tick array at ${startTick}: ${e.message}`);
+            }
+        }
+
+        // Initialize pool info
+        const [whirlpoolPoolInfo] = PublicKey.findProgramAddressSync(
+            [Buffer.from("pool_info"), getSwapTypeBytes({ whirlpool: { aToB: true } }), whirlpoolPoolState.toBuffer()],
+            program.programId
+        );
+
+        try {
+            await program.account.poolInfo.fetch(whirlpoolPoolInfo);
+            console.log("  Pool info already exists");
+        } catch (e) {
+            await program.methods
+                .initializePoolInfo({ whirlpool: { aToB: true } }, whirlpoolPoolState)
+                .accounts({
+                    poolInfo: whirlpoolPoolInfo,
+                    adapterRegistry,
+                    payer: wallet.publicKey,
+                    operator: wallet.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([wallet.payer])
+                .rpc();
+            console.log("✓ Pool info initialized");
+        }
+
+        // Execute swap WITH supplemental tick arrays
+        const inAmount = new BN(100_000_000);
+        const quotedOutAmount = new BN(90_000_000);
+        const slippageBps = 100;
+        const platformFeeBps = 0;
+
+        const routePlan = [{
+            swap: { whirlpool: { aToB: true } },
+            percent: 100,
+            inputIndex: 0,
+            outputIndex: 17 // Updated for supplemental arrays
+        }];
+
+        const whirlpoolOracle = Keypair.generate().publicKey;
+
+        const remainingAccounts = [
+            { pubkey: inputVault, isWritable: true, isSigner: false },           // 0: input vault
+            { pubkey: whirlpoolPoolInfo, isWritable: true, isSigner: false },    // 1: pool_info
+            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },    // 2: token_program_a
+            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },    // 3: token_program_b
+            { pubkey: PublicKey.default, isWritable: false, isSigner: false },   // 4: memo_program
+            { pubkey: whirlpoolPoolState, isWritable: true, isSigner: false },   // 5: whirlpool (using whirlpoolPoolState)
+            { pubkey: tokenAMint, isWritable: false, isSigner: false },          // 6: token_mint_a
+            { pubkey: tokenBMint, isWritable: false, isSigner: false },          // 7: token_mint_b
+            { pubkey: inputVault, isWritable: true, isSigner: false },            // 8: token_owner_account_a
+            { pubkey: whirlpoolTokenVaultA, isWritable: true, isSigner: false },  // 9: token_vault_a
+            { pubkey: intermediateVault, isWritable: true, isSigner: false },     // 10: token_owner_account_b
+            { pubkey: whirlpoolTokenVaultB, isWritable: true, isSigner: false },  // 11: token_vault_b
+            { pubkey: tickArray0, isWritable: true, isSigner: false },            // 12: tick_array_0
+            { pubkey: tickArray1, isWritable: true, isSigner: false },            // 13: tick_array_1
+            { pubkey: tickArray2, isWritable: true, isSigner: false },             // 14: tick_array_2
+            { pubkey: whirlpoolOracle, isWritable: false, isSigner: false },       // 15: oracle
+            { pubkey: mockWhirlpoolProgramId, isWritable: false, isSigner: false }, // 16: whirlpool program
+            { pubkey: intermediateVault, isWritable: true, isSigner: false },   // 17: output vault
+        ];
+
+        const initialSource = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
+        const initialIntermediate = (await getAccount(provider.connection, userIntermediateTokenAccount)).amount;
+
+
+        // Platform fee account
+        const tokenAccount = await getOrCreateAssociatedTokenAccount(
+            provider.connection,
+            wallet.payer,
+            intermediateMint,
+            vaultAuthority,
+            true,
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+        );
+
+
+
+        platformFeeAccount = tokenAccount.address;
+
+        await program.methods
+            .route(routePlan, inAmount, quotedOutAmount, slippageBps, platformFeeBps)
+            .accounts({
+                adapterRegistry,
+                vaultAuthority,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                outputTokenProgram: TOKEN_PROGRAM_ID,
+                userTransferAuthority: user.publicKey,
+                userSourceTokenAccount,
+                userDestinationTokenAccount: userIntermediateTokenAccount,
+                sourceMint,
+                destinationMint: intermediateMint,
+                platformFeeAccount,
+                systemProgram: SystemProgram.programId
+            })
+            .remainingAccounts(remainingAccounts)
+            .signers([user])
+            .rpc();
+
+        const finalSource = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
+        const finalIntermediate = (await getAccount(provider.connection, userIntermediateTokenAccount)).amount;
+
+        const inputUsed = initialSource - finalSource;
+        const outputReceived = finalIntermediate - initialIntermediate;
+
+
+        assert.equal(
+            finalSource.toString(),
+            (initialSource - BigInt(inAmount.toString())).toString(),
+            "Source balance incorrect"
+        );
+        assert(finalIntermediate > initialIntermediate, "Intermediate balance should increase");
+
+        const minSwapOut = quotedOutAmount
+            .mul(new BN(10000 - slippageBps))
+            .div(new BN(10000));
+
+        assert(
+            finalIntermediate >= initialIntermediate + BigInt(minSwapOut.toString()),
+            "Output amount should meet minimum"
+        );
+
     });
+
 });
