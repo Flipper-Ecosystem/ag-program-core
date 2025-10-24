@@ -1181,7 +1181,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             swap: { whirlpool: { aToB: true } },
             percent: 100,
             inputIndex: 0,
-            outputIndex: 17 // Updated for supplemental arrays
+            outputIndex: 20 // Updated for supplemental arrays
         }];
 
         const whirlpoolOracle = Keypair.generate().publicKey;
@@ -1203,8 +1203,12 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             { pubkey: tickArray1, isWritable: true, isSigner: false },            // 13: tick_array_1
             { pubkey: tickArray2, isWritable: true, isSigner: false },             // 14: tick_array_2
             { pubkey: whirlpoolOracle, isWritable: false, isSigner: false },       // 15: oracle
-            { pubkey: mockWhirlpoolProgramId, isWritable: false, isSigner: false }, // 16: whirlpool program
-            { pubkey: intermediateVault, isWritable: true, isSigner: false },   // 17: output vault
+            // Supplemental tick arrays (dynamic part)
+            { pubkey: supplementalTickArray0, isWritable: true, isSigner: false }, // 16
+            { pubkey: supplementalTickArray1, isWritable: true, isSigner: false }, // 17
+            { pubkey: supplementalTickArray2, isWritable: true, isSigner: false }, // 18
+            { pubkey: mockWhirlpoolProgramId, isWritable: false, isSigner: false }, // 19: whirlpool program
+            { pubkey: intermediateVault, isWritable: true, isSigner: false },   // 20: output vault
         ];
 
         const initialSource = (await getAccount(provider.connection, userSourceTokenAccount)).amount;

@@ -79,7 +79,8 @@ impl DexAdapter for WhirlpoolAdapter {
         let initial_output_amount = output_vault_data.amount;
 
         // Calculate supplemental tick arrays (up to 3: -200, 200, 300)
-        let supplemental_tick_arrays_count = ((adapter_accounts.len() - MIN_ACCOUNTS).min(3)) as u8;
+        let supplemental_tick_arrays_count = ((remaining_accounts_count - MIN_ACCOUNTS - 1).min(3)) as u8;
+        
 
         // Create swap args
         let swap_args = SwapV2Args {
@@ -105,7 +106,7 @@ impl DexAdapter for WhirlpoolAdapter {
         instruction_data.extend_from_slice(&swap_args.try_to_vec()?);
 
         // Build account metas in SwapV2 order
-        let accounts = vec![
+        let mut accounts = vec![
             AccountMeta::new_readonly(adapter_accounts[1].key(), false),    // token_program_a
             AccountMeta::new_readonly(adapter_accounts[2].key(), false),    // token_program_b
             AccountMeta::new_readonly(adapter_accounts[3].key(), false),    // memo_program
@@ -122,6 +123,12 @@ impl DexAdapter for WhirlpoolAdapter {
             AccountMeta::new(adapter_accounts[13].key(), false),            // tick_array_2
             AccountMeta::new_readonly(adapter_accounts[14].key(), false),   // oracle
         ];
+
+
+        // Add supplemental tick arrays
+        for i in 0..supplemental_tick_arrays_count {
+            accounts.push(AccountMeta::new(adapter_accounts[15 + i as usize].key(), false));
+        }
 
         // Build AccountInfo vector
         let mut account_infos = vec![
@@ -141,6 +148,10 @@ impl DexAdapter for WhirlpoolAdapter {
             adapter_accounts[13].clone(),    // tick_array_2
             adapter_accounts[14].clone(),    // oracle
         ];
+
+        for i in 0..supplemental_tick_arrays_count {
+            account_infos.push(adapter_accounts[15 + i as usize].clone());
+        }
 
 
         let instruction = Instruction {
