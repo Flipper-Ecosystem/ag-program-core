@@ -222,7 +222,7 @@ describe("Meteora Adapter - End to End Tests for Swaps", () => {
 
 
         const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
-        
+
         // Initialize pool info
         [meteoraPoolInfo] = PublicKey.findProgramAddressSync(
             [Buffer.from("pool_info"), getSwapTypeBytes({ meteora: {} }), meteoraPoolState.toBuffer()],
