@@ -58,8 +58,9 @@ impl DexAdapter for MeteoraAdapter {
     ) -> Result<SwapResult> {
         msg!("Executing Meteora swap2, amount: {}", amount);
 
+        const MIN_ACCOUNTS: usize = 16;
         // Ensure minimum required accounts are present
-        if remaining_accounts_count < 16 {
+        if remaining_accounts_count < MIN_ACCOUNTS {
             return Err(ErrorCode::NotEnoughAccountKeys.into());
         }
 
@@ -78,7 +79,7 @@ impl DexAdapter for MeteoraAdapter {
         }
 
         // Calculate number of bin arrays available (maximum 10 for Meteora)
-        let bin_arrays_count = (remaining_accounts_count - 16).min(10) as u8;
+        let bin_arrays_count = ((remaining_accounts_count - MIN_ACCOUNTS - 1)).min(10) as u8;
 
         // Record initial output token balance for calculating swap result
         let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
@@ -105,21 +106,21 @@ impl DexAdapter for MeteoraAdapter {
         // Order must match Meteora swap2 interface exactly
         let mut accounts = vec![
             AccountMeta::new(remaining_accounts[1].key(), false),       // lb_pair
-            AccountMeta::new_readonly(remaining_accounts[2].key(), false), // bin_array_bitmap_extension
+            AccountMeta::new(remaining_accounts[2].key(), false), // bin_array_bitmap_extension
             AccountMeta::new(remaining_accounts[3].key(), false),       // reserve_x
             AccountMeta::new(remaining_accounts[4].key(), false),       // reserve_y
             AccountMeta::new(ctx.input_account.key(), false),           // user_token_in
             AccountMeta::new(ctx.output_account.key(), false),          // user_token_out
-            AccountMeta::new_readonly(remaining_accounts[5].key(), false), // token_x_mint
-            AccountMeta::new_readonly(remaining_accounts[6].key(), false), // token_y_mint
-            AccountMeta::new(remaining_accounts[7].key(), false),       // oracle
-            AccountMeta::new(remaining_accounts[8].key(), false),       // host_fee_account
+            AccountMeta::new_readonly(remaining_accounts[7].key(), false), // token_x_mint
+            AccountMeta::new_readonly(remaining_accounts[8].key(), false), // token_y_mint
+            AccountMeta::new(remaining_accounts[9].key(), false),       // oracle
+            AccountMeta::new(remaining_accounts[10].key(), false),       // host_fee_account
             AccountMeta::new_readonly(ctx.authority.key(), true),       // user (signer)
-            AccountMeta::new_readonly(remaining_accounts[9].key(), false), // token_x_program
-            AccountMeta::new_readonly(remaining_accounts[10].key(), false), // token_y_program
-            AccountMeta::new_readonly(remaining_accounts[11].key(), false), // memo_program
-            AccountMeta::new_readonly(remaining_accounts[12].key(), false), // event_authority
-            AccountMeta::new_readonly(remaining_accounts[13].key(), false), // program
+            AccountMeta::new_readonly(remaining_accounts[11].key(), false), // token_x_program
+            AccountMeta::new_readonly(remaining_accounts[12].key(), false), // token_y_program
+            AccountMeta::new_readonly(remaining_accounts[13].key(), false), // memo_program
+            AccountMeta::new_readonly(remaining_accounts[14].key(), false), // event_authority
+            AccountMeta::new_readonly(remaining_accounts[15].key(), false), // program
         ];
 
         // Add bin arrays to account metas (dynamic part)
@@ -135,16 +136,16 @@ impl DexAdapter for MeteoraAdapter {
             remaining_accounts[4].clone(),   // reserve_y
             ctx.input_account.clone(),       // user_token_in
             ctx.output_account.clone(),      // user_token_out
-            remaining_accounts[5].clone(),   // token_x_mint
-            remaining_accounts[6].clone(),   // token_y_mint
-            remaining_accounts[7].clone(),   // oracle
-            remaining_accounts[8].clone(),   // host_fee_account
+            remaining_accounts[7].clone(),   // token_x_mint
+            remaining_accounts[8].clone(),   // token_y_mint
+            remaining_accounts[9].clone(),   // oracle
+            remaining_accounts[10].clone(),   // host_fee_account
             ctx.authority.clone(),           // user
-            remaining_accounts[9].clone(),   // token_x_program
-            remaining_accounts[10].clone(),  // token_y_program
-            remaining_accounts[11].clone(),  // memo_program
-            remaining_accounts[12].clone(),  // event_authority
-            remaining_accounts[13].clone(),  // program
+            remaining_accounts[11].clone(),   // token_x_program
+            remaining_accounts[12].clone(),  // token_y_program
+            remaining_accounts[13].clone(),  // memo_program
+            remaining_accounts[14].clone(),  // event_authority
+            remaining_accounts[15].clone(),  // program
         ];
 
         // Add dynamic bin arrays
@@ -200,8 +201,11 @@ impl DexAdapter for MeteoraAdapter {
         remaining_accounts_start_index: usize,
         remaining_accounts_count: usize,
     ) -> Result<()> {
+
+        const MIN_ACCOUNTS: usize = 16;
+
         // Ensure minimum required accounts are present
-        if remaining_accounts_count < 16 {
+        if remaining_accounts_count < MIN_ACCOUNTS {
             return Err(ErrorCode::NotEnoughAccountKeys.into());
         }
 
@@ -225,9 +229,9 @@ impl DexAdapter for MeteoraAdapter {
         }
 
         // Validate token programs are correct (SPL Token or Token2022)
-        let token_x_program = &remaining_accounts[9];
-        let token_y_program = &remaining_accounts[10];
-        let program = &remaining_accounts[13];
+        let token_x_program = &remaining_accounts[11];
+        let token_y_program = &remaining_accounts[12];
+        let program = &remaining_accounts[15];
 
         if program.key() != self.program_id {
             return Err(ErrorCode::InvalidCpiInterface.into());

@@ -833,8 +833,9 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             "Order should be in Open status"
         );
     });
+    */
 
-    it("6. Stop Loss order - execute when price drops", async () => {
+    /*it("6. Stop Loss order - execute when price drops", async () => {
         const nonce = new BN(Date.now());
         const inputAmount = new BN(50_000_000);
         const minOutputAmount = new BN(33_000_000); // baseline price
@@ -946,9 +947,9 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
 
         const orderAccount = await program.account.limitOrder.fetch(limitOrder);
         assert.equal(orderAccount.status.filled !== undefined, true, "Order should be filled");
-    });*/
+    });
 
-
+    */
 
     it("7. Single-hop swap with Whirlpool adapter (with supplemental tick arrays)", async () => {
         const [tokenAMint, tokenBMint] = sourceMint.toString() < intermediateMint.toString()

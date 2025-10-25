@@ -105,7 +105,6 @@ pub mod mock_meteora_swap {
 
         // Validate input amounts
         require!(amount_in > 0, ErrorCode::ZeroAmount);
-        require!(min_amount_out > 0, ErrorCode::ZeroAmount);
 
         // Load lb_pair state
         let lb_pair = &mut ctx.accounts.lb_pair;
@@ -399,7 +398,9 @@ pub struct Swap2<'info> {
     ///CHECK event authority
     pub event_authority: UncheckedAccount<'info>,
 
-    pub program: Program<'info, System>,
+    /// CHECK: The Meteora program itself (self-reference for CPI)
+    #[account(executable)]
+    pub program: UncheckedAccount<'info>
 }
 
 #[account]
