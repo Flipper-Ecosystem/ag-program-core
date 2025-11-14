@@ -205,7 +205,7 @@ pub fn create_limit_order(
     if min_output_amount == 0 {
         return Err(ErrorCode::InvalidAmount.into());
     }
-    if trigger_price_bps == 0 || trigger_price_bps > 10_000 {
+    if trigger_price_bps == 0 {
         return Err(ErrorCode::InvalidTriggerPrice.into());
     }
     if expiry <= Clock::get()?.unix_timestamp {
@@ -698,7 +698,7 @@ pub fn route_and_create_order<'info>(
     // Validate order parameters
     require!(order_min_output_amount > 0, ErrorCode::InvalidAmount);
     require!(
-        order_trigger_price_bps > 0 && order_trigger_price_bps <= 10_000,
+        order_trigger_price_bps > 0,
         ErrorCode::InvalidTriggerPrice
     );
     require!(

@@ -14,7 +14,7 @@ import {
 import { assert } from "chai";
 import { Flipper } from "../target/types/flipper";
 
-describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", () => {
+describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
     const provider = anchor.AnchorProvider.env();
     anchor.setProvider(provider);
     const program = anchor.workspace.Flipper as Program<Flipper>;
@@ -30,42 +30,23 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
     let adapterRegistry: PublicKey;
     let adapterRegistryBump: number;
     let sourceMint: PublicKey;
-    let intermediateMint: PublicKey;
     let destinationMint: PublicKey;
     let userSourceTokenAccount: PublicKey;
-    let userIntermediateTokenAccount: PublicKey;
     let userDestinationTokenAccount: PublicKey;
     let inputVault: PublicKey;
-    let intermediateVault: PublicKey;
     let outputVault: PublicKey;
     let platformFeeAccount: PublicKey;
     let mockRaydiumProgramId: PublicKey;
-    let mockWhirlpoolProgramId: PublicKey;
-    let mockMeteoraProgramId: PublicKey;
     let raydiumPoolInfo: PublicKey;
-    let whirlpoolPoolInfo: PublicKey;
-    let meteoraPoolInfo: PublicKey;
     let raydiumAmmConfig: PublicKey;
     let raydiumPoolState: PublicKey;
-    let whirlpoolPoolState: PublicKey;
-    let meteoraPoolState: PublicKey;
     let raydiumPoolAuthority: PublicKey;
     let raydiumTokenAVault: PublicKey;
     let raydiumTokenBVault: PublicKey;
     let raydiumObservationState: PublicKey;
-    let whirlpoolTokenVaultA: PublicKey;
-    let whirlpoolTokenVaultB: PublicKey;
-    let whirlpoolOracle: PublicKey;
-    let whirlpoolTickArray: PublicKey;
-    let meteoraReserveX: PublicKey;
-    let meteoraReserveY: PublicKey;
-    let meteoraOracle: PublicKey;
-    let meteoraBinArray: PublicKey;
 
     // Mock programs
     const mockRaydiumProgram = anchor.workspace.MockRaydium;
-    const mockWhirlpoolProgram = anchor.workspace.MockWhirlpoolSwap;
-    const mockMeteoraProgram = anchor.workspace.MockMeteoraSwap;
 
     // Helper function for swapType bytes
     function getSwapTypeBytes(swapType: any): Buffer {
@@ -93,44 +74,72 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
         await new Promise(resolve => setTimeout(resolve, 1000));
 
         // PDAs
-        [vaultAuthority, vaultAuthorityBump] = PublicKey.findProgramAddressSync([Buffer.from("vault_authority")], program.programId);
-
-        // Fund vault_authority with SOL
-        const fundTx = new Transaction().add(
-            SystemProgram.transfer({
-                fromPubkey: wallet.payer.publicKey,
-                toPubkey: vaultAuthority,
-                lamports: 10_000_000_000
-            })
+        [vaultAuthority, vaultAuthorityBump] = PublicKey.findProgramAddressSync(
+            [Buffer.from("vault_authority")],
+            program.programId
         );
-        await provider.sendAndConfirm(fundTx, [wallet.payer]);
 
-        [adapterRegistry, adapterRegistryBump] = PublicKey.findProgramAddressSync([Buffer.from("adapter_registry")], program.programId);
+        [adapterRegistry, adapterRegistryBump] = PublicKey.findProgramAddressSync(
+            [Buffer.from("adapter_registry")],
+            program.programId
+        );
 
-        // Create vault authority
-        await program.methods
-            .createVaultAuthority()
-            .accounts({
-                vaultAuthority,
-                payer: wallet.publicKey,
-                admin: admin.publicKey,
-                systemProgram: SystemProgram.programId,
-            })
-            .signers([wallet.payer])
-            .rpc();
+        // Check if vault_authority already exists
+        const vaultAuthorityInfo = await provider.connection.getAccountInfo(vaultAuthority);
+        if (!vaultAuthorityInfo) {
+            // Create vault authority only if it doesn't exist
+            await program.methods
+                .createVaultAuthority()
+                .accounts({
+                    vaultAuthority,
+                    payer: wallet.publicKey,
+                    admin: admin.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([wallet.payer])
+                .rpc();
+
+            //console.log("✓ Vault authority created");
+        } else {
+            //console.log("✓ Vault authority already exists, reusing");
+        }
 
         // Mints
-        sourceMint = await createMint(provider.connection, wallet.payer, wallet.publicKey, null, 9, undefined, undefined, TOKEN_PROGRAM_ID);
-        intermediateMint = await createMint(provider.connection, wallet.payer, wallet.publicKey, null, 9, undefined, undefined, TOKEN_PROGRAM_ID);
-        destinationMint = await createMint(provider.connection, wallet.payer, wallet.publicKey, null, 9, undefined, undefined, TOKEN_PROGRAM_ID);
+        sourceMint = await createMint(
+            provider.connection,
+            wallet.payer,
+            wallet.publicKey,
+            null,
+            9,
+            undefined,
+            undefined,
+            TOKEN_PROGRAM_ID
+        );
+
+        destinationMint = await createMint(
+            provider.connection,
+            wallet.payer,
+            wallet.publicKey,
+            null,
+            9,
+            undefined,
+            undefined,
+            TOKEN_PROGRAM_ID
+        );
 
         // Vaults
-        [inputVault] = PublicKey.findProgramAddressSync([Buffer.from("vault"), sourceMint.toBuffer()], program.programId);
-        [intermediateVault] = PublicKey.findProgramAddressSync([Buffer.from("vault"), intermediateMint.toBuffer()], program.programId);
-        [outputVault] = PublicKey.findProgramAddressSync([Buffer.from("vault"), destinationMint.toBuffer()], program.programId);
+        [inputVault] = PublicKey.findProgramAddressSync(
+            [Buffer.from("vault"), sourceMint.toBuffer()],
+            program.programId
+        );
+
+        [outputVault] = PublicKey.findProgramAddressSync(
+            [Buffer.from("vault"), destinationMint.toBuffer()],
+            program.programId
+        );
 
         // Create vaults
-        for (const [vault, mint] of [[inputVault, sourceMint], [intermediateVault, intermediateMint], [outputVault, destinationMint]]) {
+        for (const [vault, mint] of [[inputVault, sourceMint], [outputVault, destinationMint]]) {
             await program.methods
                 .createVault()
                 .accounts({
@@ -147,15 +156,47 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
         }
 
         // User accounts
-        userSourceTokenAccount = await createAssociatedTokenAccount(provider.connection, user, sourceMint, user.publicKey);
-        userIntermediateTokenAccount = await createAssociatedTokenAccount(provider.connection, user, intermediateMint, user.publicKey);
-        userDestinationTokenAccount = await createAssociatedTokenAccount(provider.connection, user, destinationMint, user.publicKey);
+        userSourceTokenAccount = await createAssociatedTokenAccount(
+            provider.connection,
+            user,
+            sourceMint,
+            user.publicKey
+        );
+
+        userDestinationTokenAccount = await createAssociatedTokenAccount(
+            provider.connection,
+            user,
+            destinationMint,
+            user.publicKey
+        );
 
         // Mint to user and vaults
-        await mintTo(provider.connection, wallet.payer, sourceMint, userSourceTokenAccount, wallet.publicKey, 1_000_000_000_000);
-        await mintTo(provider.connection, wallet.payer, sourceMint, inputVault, wallet.publicKey, 1_000_000_000_000);
-        await mintTo(provider.connection, wallet.payer, intermediateMint, intermediateVault, wallet.publicKey, 1_000_000_000_000);
-        await mintTo(provider.connection, wallet.payer, destinationMint, outputVault, wallet.publicKey, 1_000_000_000_000);
+        await mintTo(
+            provider.connection,
+            wallet.payer,
+            sourceMint,
+            userSourceTokenAccount,
+            wallet.publicKey,
+            1_000_000_000_000
+        );
+
+        await mintTo(
+            provider.connection,
+            wallet.payer,
+            sourceMint,
+            inputVault,
+            wallet.publicKey,
+            1_000_000_000_000
+        );
+
+        await mintTo(
+            provider.connection,
+            wallet.payer,
+            destinationMint,
+            outputVault,
+            wallet.publicKey,
+            1_000_000_000_000
+        );
 
         // Platform fee account
         const tokenAccount = await getOrCreateAssociatedTokenAccount(
@@ -168,42 +209,69 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             ASSOCIATED_TOKEN_PROGRAM_ID
         );
 
-
-
         platformFeeAccount = tokenAccount.address;
 
         // Setup mocks and adapters
         mockRaydiumProgramId = mockRaydiumProgram.programId;
-        mockWhirlpoolProgramId = mockWhirlpoolProgram.programId;
-        mockMeteoraProgramId = mockMeteoraProgram.programId;
 
         const raydiumAmmConfigKeypair = Keypair.generate();
         raydiumAmmConfig = raydiumAmmConfigKeypair.publicKey;
 
+        // Check if adapter registry exists
+        const registryInfo = await provider.connection.getAccountInfo(adapterRegistry);
+        if (!registryInfo) {
+            // Include wallet.publicKey in the operators list during initialization
+            await program.methods
+                .initializeAdapterRegistry([], [operator.publicKey, wallet.publicKey]) // CHANGED: Added wallet.publicKey
+                .accounts({
+                    adapterRegistry,
+                    payer: wallet.publicKey,
+                    operator: wallet.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([wallet.payer])
+                .rpc();
+
+            //console.log("✓ Adapter registry initialized");
+        } else {
+            //console.log("✓ Adapter registry already exists, reusing");
+
+            // If registry exists, we might need to add wallet as operator
+            try {
+                const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
+                const isOperator = registryAccount.operators.some(
+                    (op: PublicKey) => op.equals(wallet.publicKey)
+                );
+
+                if (!isOperator) {
+                    //console.log("⚠ Wallet is not an operator, attempting to add...");
+                    // Try to add wallet as operator using another existing operator
+                    await program.methods
+                        .addOperator(operator.publicKey)
+                        .accounts({
+                            adapterRegistry,
+                            authority: wallet.publicKey, // This might fail if wallet isn't already an operator
+                        })
+                        .signers([wallet.payer])
+                        .rpc();
+                    //console.log("✓ Wallet added as operator");
+                }
+            } catch (e) {
+                //console.log("Note: Could not verify/add operator status:", e.message);
+            }
+        }
+
+        // Configure Raydium adapter
         await program.methods
-            .initializeAdapterRegistry([], [operator.publicKey])
+            .configureAdapter({
+                name: "raydium",
+                programId: mockRaydiumProgramId,
+                swapType: { raydium: {} }
+            })
             .accounts({
                 adapterRegistry,
-                payer: wallet.publicKey,
-                operator: wallet.publicKey,
-                systemProgram: SystemProgram.programId,
+                operator: wallet.publicKey
             })
-            .signers([wallet.payer])
-            .rpc();
-
-        await program.methods
-            .configureAdapter({ name: "raydium", programId: mockRaydiumProgramId, swapType: { raydium: {} } })
-            .accounts({ adapterRegistry, operator: wallet.publicKey })
-            .signers([wallet.payer])
-            .rpc();
-        await program.methods
-            .configureAdapter({ name: "whirlpool", programId: mockWhirlpoolProgramId, swapType: { whirlpool: { aToB: true } } })
-            .accounts({ adapterRegistry, operator: wallet.publicKey })
-            .signers([wallet.payer])
-            .rpc();
-        await program.methods
-            .configureAdapter({ name: "meteora", programId: mockMeteoraProgramId, swapType: { meteora: {} } })
-            .accounts({ adapterRegistry, operator: wallet.publicKey })
             .signers([wallet.payer])
             .rpc();
 
@@ -212,10 +280,12 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
         const [tokenAMint, tokenBMint] = sourceMint.toString() < destinationMint.toString()
             ? [sourceMint, destinationMint]
             : [destinationMint, sourceMint];
+
         [raydiumPoolState] = PublicKey.findProgramAddressSync(
             [Buffer.from("pool_state"), tokenAMint.toBuffer(), tokenBMint.toBuffer()],
             mockRaydiumProgramId
         );
+
         [raydiumPoolAuthority] = PublicKey.findProgramAddressSync(
             [Buffer.from("vault_and_lp_mint_auth_seed")],
             mockRaydiumProgramId
@@ -229,6 +299,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             TOKEN_PROGRAM_ID,
             ASSOCIATED_TOKEN_PROGRAM_ID
         );
+
         raydiumTokenBVault = getAssociatedTokenAddressSync(
             tokenBMint,
             raydiumPoolAuthority,
@@ -250,6 +321,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             undefined,
             TOKEN_PROGRAM_ID
         );
+
         const userTokenBAccount = await createAssociatedTokenAccount(
             provider.connection,
             wallet.payer,
@@ -271,6 +343,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             undefined,
             TOKEN_PROGRAM_ID
         );
+
         await mintTo(
             provider.connection,
             wallet.payer,
@@ -308,6 +381,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             [Buffer.from("pool_info"), getSwapTypeBytes({ raydium: {} }), raydiumPoolState.toBuffer()],
             program.programId
         );
+
         await program.methods
             .initializePoolInfo({ raydium: {} }, raydiumPoolState)
             .accounts({
@@ -320,12 +394,10 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             .signers([wallet.payer])
             .rpc();
 
-
-        const poolStateAccount = await program.account.poolInfo.fetch(raydiumPoolInfo);
-
+        //console.log("✓ Setup complete");
     });
 
-    /*it("1. Simple single-hop swap with Raydium adapter", async () => {
+    it("1. Simple single-hop swap with Raydium adapter", async () => {
         const inAmount = new BN(100_000_000);
         const quotedOutAmount = new BN(90_000_000);
 
@@ -334,10 +406,13 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
 
         const routePlan = [{ swap: { raydium: {} }, percent: 100, inputIndex: 0, outputIndex: 13 }];
 
+        const inputPoolVault = sourceMint.toString() < destinationMint.toString()
+            ? raydiumTokenAVault
+            : raydiumTokenBVault;
 
-        const inputPoolVault = sourceMint.toString() < destinationMint.toString() ? raydiumTokenAVault : raydiumTokenBVault;
-
-        const outputPoolVault = sourceMint.toString() < destinationMint.toString() ? raydiumTokenBVault : raydiumTokenAVault;
+        const outputPoolVault = sourceMint.toString() < destinationMint.toString()
+            ? raydiumTokenBVault
+            : raydiumTokenAVault;
 
         const remainingAccounts = [
             { pubkey: inputVault, isWritable: true, isSigner: false }, // index 0: input_vault
@@ -352,7 +427,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             { pubkey: sourceMint, isWritable: false, isSigner: false }, // index 9
             { pubkey: destinationMint, isWritable: false, isSigner: false }, // index 10
             { pubkey: raydiumObservationState, isWritable: true, isSigner: false }, // index 11
-            { pubkey: mockRaydiumProgramId, isWritable: false, isSigner: false }, // index 12:  program id
+            { pubkey: mockRaydiumProgramId, isWritable: false, isSigner: false }, // index 12: program id
             { pubkey: outputVault, isWritable: true, isSigner: false }, // index 13: output vault
         ];
 
@@ -381,13 +456,13 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
         const finalSource = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
         const finalDest = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
 
-        // Конвертируем BN в BigInt для операций
+        // Convert BN to BigInt for operations
         const inAmountBN = BigInt(inAmount.toString());
 
-        // Расчет ожидаемого выходного количества с учетом slippage
+        // Calculate expected output with slippage
         const minOutAmount = quotedOutAmount.mul(new BN(10000 - slippageBps)).div(new BN(10000));
         const expectedOutAmount = BigInt(minOutAmount.toString());
-        
+
         assert.equal(
             finalSource.toString(),
             (initialSource - inAmountBN).toString(),
@@ -398,6 +473,8 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             finalDest > (initialDest + expectedOutAmount),
             "Destination balance incorrect"
         );
+
+        //console.log("✓ Single-hop swap completed successfully");
     });
 
     it("2. Create limit order (Take Profit)", async () => {
@@ -464,6 +541,8 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
         const orderAccount = await program.account.limitOrder.fetch(limitOrder);
         assert.equal(orderAccount.inputAmount.toString(), inputAmount.toString());
         assert.equal(orderAccount.status.open !== undefined, true);
+
+        //console.log("✓ Limit order created successfully");
     });
 
     it("3. Execute limit order when trigger met", async () => {
@@ -546,11 +625,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
 
         const initialDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
 
-        const orderData = await program.account.limitOrder.fetch(limitOrder);
-
-        const priceRatio = quotedOutAmount.mul(new BN(10000)).div(orderData.minOutputAmount);
-        const triggerRatio = 10000 + orderData.triggerPriceBps;
-
         await program.methods
             .executeLimitOrder(routePlan, quotedOutAmount, platformFeeBps)
             .accounts({
@@ -573,9 +647,10 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
         const finalDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
         assert(finalDestBalance > initialDestBalance, "Destination balance should increase");
 
-
         const orderAccount = await program.account.limitOrder.fetch(limitOrder);
         assert.equal(orderAccount.status.filled !== undefined, true);
+
+        //console.log("✓ Limit order executed successfully");
     });
 
     it("4. Cancel limit order", async () => {
@@ -647,6 +722,8 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             (initialBalance + BigInt(inputAmount.toString())).toString(),
             "Tokens not refunded"
         );
+
+        //console.log("✓ Limit order cancelled successfully");
     });
 
     it("5. Route and create order (swap then create limit order)", async () => {
@@ -655,14 +732,14 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
         const swapSlippageBps = 100; // 1% slippage for swap
         const swapPlatformFeeBps = 50; // 0.5% platform fee
 
-        // Параметры для лимит ордера
+        // Parameters for limit order
         const orderNonce = new BN(Date.now());
         const orderMinOutputAmount = new BN(85_000_000); // baseline for trigger
         const orderTriggerPriceBps = 500; // 5% price increase for take profit
         const orderExpiry = new BN(Math.floor(Date.now() / 1000) + 7200); // 2 hours
         const orderSlippageBps = 300; // 3% slippage for order execution
 
-        // Деривация аккаунтов
+        // Derive accounts
         const [limitOrder] = PublicKey.findProgramAddressSync(
             [Buffer.from("limit_order"), user.publicKey.toBuffer(), orderNonce.toArrayLike(Buffer, 'le', 8)],
             program.programId
@@ -673,7 +750,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             program.programId
         );
 
-        // Route plan для свопа source -> destination
+        // Route plan for swap source -> destination
         const routePlan = [
             { swap: { raydium: {} }, percent: 100, inputIndex: 0, outputIndex: 13 }
         ];
@@ -685,7 +762,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             ? raydiumTokenBVault
             : raydiumTokenAVault;
 
-        // Remaining accounts для свопа
+        // Remaining accounts for swap
         const remainingAccounts = [
             { pubkey: inputVault, isWritable: true, isSigner: false }, // index 0: temp input vault
             { pubkey: raydiumPoolInfo, isWritable: true, isSigner: false }, // index 1
@@ -703,12 +780,12 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             { pubkey: orderVault, isWritable: true, isSigner: false }, // index 13: output goes to order vault
         ];
 
-        // Начальные балансы
+        // Initial balances
         const initialSourceBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
         const initialDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
 
-        // Выполняем route_and_create_order
-        const tx = await program.methods
+        // Execute route_and_create_order
+        await program.methods
             .routeAndCreateOrder(
                 orderNonce,
                 routePlan,
@@ -740,7 +817,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             .signers([user])
             .rpc();
 
-
         const finalSourceBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
 
         assert.equal(
@@ -756,7 +832,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             "User destination balance should not change (tokens in order vault)"
         );
 
-
         const orderVaultBalance = (await getAccount(provider.connection, orderVault)).amount;
         assert(orderVaultBalance > 0n, "Order vault should have tokens from swap");
 
@@ -770,7 +845,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             orderVaultBalance >= BigInt(expectedVaultBalance.toString()),
             "Order vault balance should be at least expected amount after fees"
         );
-
 
         const orderAccount = await program.account.limitOrder.fetch(limitOrder);
 
@@ -832,10 +906,11 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
             orderAccount.status.open !== undefined,
             "Order should be in Open status"
         );
-    });
-    */
 
-    /*it("6. Stop Loss order - execute when price drops", async () => {
+        //console.log("✓ Route and create order completed successfully");
+    });
+
+    it("6. Stop Loss order - execute when price drops", async () => {
         const nonce = new BN(Date.now());
         const inputAmount = new BN(50_000_000);
         const minOutputAmount = new BN(33_000_000); // baseline price
@@ -947,332 +1022,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders", 
 
         const orderAccount = await program.account.limitOrder.fetch(limitOrder);
         assert.equal(orderAccount.status.filled !== undefined, true, "Order should be filled");
+
+        //console.log("✓ Stop loss order executed successfully");
     });
-
-    */
-
-    it("7. Single-hop swap with Whirlpool adapter (with supplemental tick arrays)", async () => {
-        const [tokenAMint, tokenBMint] = sourceMint.toString() < intermediateMint.toString()
-            ? [sourceMint, intermediateMint]
-            : [intermediateMint, sourceMint];
-
-        const [whirlpoolPoolState] = PublicKey.findProgramAddressSync(
-            [Buffer.from("whirlpool"), tokenAMint.toBuffer(), tokenBMint.toBuffer()],
-            mockWhirlpoolProgramId
-        );
-
-        // Derive all tick array addresses
-        const [tickArray0] = PublicKey.findProgramAddressSync(
-            [Buffer.from("tick_array"), whirlpoolPoolState.toBuffer(), Buffer.from(new Int32Array([-100]).buffer)],
-            mockWhirlpoolProgramId
-        );
-        const [tickArray1] = PublicKey.findProgramAddressSync(
-            [Buffer.from("tick_array"), whirlpoolPoolState.toBuffer(), Buffer.from(new Int32Array([0]).buffer)],
-            mockWhirlpoolProgramId
-        );
-        const [tickArray2] = PublicKey.findProgramAddressSync(
-            [Buffer.from("tick_array"), whirlpoolPoolState.toBuffer(), Buffer.from(new Int32Array([100]).buffer)],
-            mockWhirlpoolProgramId
-        );
-
-        // Supplemental tick arrays
-        const [supplementalTickArray0] = PublicKey.findProgramAddressSync(
-            [Buffer.from("tick_array"), whirlpoolPoolState.toBuffer(), Buffer.from(new Int32Array([-200]).buffer)],
-            mockWhirlpoolProgramId
-        );
-        const [supplementalTickArray1] = PublicKey.findProgramAddressSync(
-            [Buffer.from("tick_array"), whirlpoolPoolState.toBuffer(), Buffer.from(new Int32Array([200]).buffer)],
-            mockWhirlpoolProgramId
-        );
-        const [supplementalTickArray2] = PublicKey.findProgramAddressSync(
-            [Buffer.from("tick_array"), whirlpoolPoolState.toBuffer(), Buffer.from(new Int32Array([300]).buffer)],
-            mockWhirlpoolProgramId
-        );
-
-        const whirlpoolTokenVaultA = getAssociatedTokenAddressSync(
-            tokenAMint,
-            whirlpoolPoolState,
-            true,
-            TOKEN_PROGRAM_ID
-        );
-        const whirlpoolTokenVaultB = getAssociatedTokenAddressSync(
-            tokenBMint,
-            whirlpoolPoolState,
-            true,
-            TOKEN_PROGRAM_ID
-        );
-
-        // Get wallet's token accounts (create if needed)
-        const walletTokenA = getAssociatedTokenAddressSync(
-            tokenAMint,
-            wallet.publicKey,
-            false,
-            TOKEN_PROGRAM_ID
-        );
-        const walletTokenB = getAssociatedTokenAddressSync(
-            tokenBMint,
-            wallet.publicKey,
-            false,
-            TOKEN_PROGRAM_ID
-        );
-
-        // Check if pool exists
-        let poolExists = false;
-        try {
-            await mockWhirlpoolProgram.account.whirlpool.fetch(whirlpoolPoolState);
-            poolExists = true;
-        } catch (e) {
-            console.log("Initializing new Whirlpool pool");
-        }
-
-        if (!poolExists) {
-            // Make sure wallet has the tokens
-            let walletTokenAInfo;
-            try {
-                walletTokenAInfo = await getAccount(provider.connection, walletTokenA);
-            } catch (e) {
-                // Create and mint
-                await createAssociatedTokenAccount(
-                    provider.connection,
-                    wallet.payer,
-                    tokenAMint,
-                    wallet.publicKey
-                );
-                await mintTo(
-                    provider.connection,
-                    wallet.payer,
-                    tokenAMint,
-                    walletTokenA,
-                    wallet.publicKey,
-                    10_000_000_000_000
-                );
-            }
-
-            let walletTokenBInfo;
-            try {
-                walletTokenBInfo = await getAccount(provider.connection, walletTokenB);
-            } catch (e) {
-                // Create and mint
-                await createAssociatedTokenAccount(
-                    provider.connection,
-                    wallet.payer,
-                    tokenBMint,
-                    wallet.publicKey
-                );
-                await mintTo(
-                    provider.connection,
-                    wallet.payer,
-                    tokenBMint,
-                    walletTokenB,
-                    wallet.publicKey,
-                    10_000_000_000_000
-                );
-            }
-
-            // Now check balances and mint if needed
-            walletTokenAInfo = await getAccount(provider.connection, walletTokenA);
-            walletTokenBInfo = await getAccount(provider.connection, walletTokenB);
-
-            if (walletTokenAInfo.amount < 1_000_000_000n) {
-                await mintTo(
-                    provider.connection,
-                    wallet.payer,
-                    tokenAMint,
-                    walletTokenA,
-                    wallet.publicKey,
-                    10_000_000_000_000
-                );
-            }
-
-            if (walletTokenBInfo.amount < 1_000_000_000n) {
-                await mintTo(
-                    provider.connection,
-                    wallet.payer,
-                    tokenBMint,
-                    walletTokenB,
-                    wallet.publicKey,
-                    10_000_000_000_000
-                );
-            }
-
-            // Initialize pool (this will create main tick arrays automatically)
-            await mockWhirlpoolProgram.methods
-                .initializePool(new BN(1_000_000_000), new BN(1_000_000_000))
-                .accounts({
-                    user: wallet.publicKey,
-                    whirlpool: whirlpoolPoolState,
-                    tickArray0,
-                    tickArray1,
-                    tickArray2,
-                    userTokenA: walletTokenA,
-                    userTokenB: walletTokenB,
-                    tokenVaultA: whirlpoolTokenVaultA,
-                    tokenVaultB: whirlpoolTokenVaultB,
-                    tokenMintA: tokenAMint,
-                    tokenMintB: tokenBMint,
-                    tokenProgramA: TOKEN_PROGRAM_ID,
-                    tokenProgramB: TOKEN_PROGRAM_ID,
-                    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-                    systemProgram: SystemProgram.programId,
-                })
-                .signers([wallet.payer])
-                .rpc();
-
-        }
-
-        // Create supplemental tick arrays
-        for (const [tickArray, startTick] of [
-            [supplementalTickArray0, -200],
-            [supplementalTickArray1, 200],
-            [supplementalTickArray2, 300]
-        ]) {
-            try {
-                const accountInfo = await provider.connection.getAccountInfo(tickArray);
-                if (!accountInfo) {
-                    await mockWhirlpoolProgram.methods
-                        .initializeSupplementalTickArray(startTick)
-                        .accounts({
-                            payer: wallet.publicKey,
-                            whirlpool: whirlpoolPoolState,
-                            tickArray,
-                            systemProgram: SystemProgram.programId,
-                        })
-                        .signers([wallet.payer])
-                        .rpc();
-
-                } else {
-                    console.log(`  Supplemental tick array at tick ${startTick} already exists`);
-                }
-            } catch (e) {
-                console.log(`  Note: Could not create supplemental tick array at ${startTick}: ${e.message}`);
-            }
-        }
-
-        // Initialize pool info
-        const [whirlpoolPoolInfo] = PublicKey.findProgramAddressSync(
-            [Buffer.from("pool_info"), getSwapTypeBytes({ whirlpool: { aToB: true } }), whirlpoolPoolState.toBuffer()],
-            program.programId
-        );
-
-        try {
-            await program.account.poolInfo.fetch(whirlpoolPoolInfo);
-            console.log("  Pool info already exists");
-        } catch (e) {
-            await program.methods
-                .initializePoolInfo({ whirlpool: { aToB: true } }, whirlpoolPoolState)
-                .accounts({
-                    poolInfo: whirlpoolPoolInfo,
-                    adapterRegistry,
-                    payer: wallet.publicKey,
-                    operator: wallet.publicKey,
-                    systemProgram: SystemProgram.programId,
-                })
-                .signers([wallet.payer])
-                .rpc();
-            console.log("✓ Pool info initialized");
-        }
-
-        // Execute swap WITH supplemental tick arrays
-        const inAmount = new BN(100_000_000);
-        const quotedOutAmount = new BN(90_000_000);
-        const slippageBps = 100;
-        const platformFeeBps = 0;
-
-        const routePlan = [{
-            swap: { whirlpool: { aToB: true } },
-            percent: 100,
-            inputIndex: 0,
-            outputIndex: 20 // Updated for supplemental arrays
-        }];
-
-        const whirlpoolOracle = Keypair.generate().publicKey;
-
-        const remainingAccounts = [
-            { pubkey: inputVault, isWritable: true, isSigner: false },           // 0: input vault
-            { pubkey: whirlpoolPoolInfo, isWritable: true, isSigner: false },    // 1: pool_info
-            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },    // 2: token_program_a
-            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },    // 3: token_program_b
-            { pubkey: PublicKey.default, isWritable: false, isSigner: false },   // 4: memo_program
-            { pubkey: whirlpoolPoolState, isWritable: true, isSigner: false },   // 5: whirlpool (using whirlpoolPoolState)
-            { pubkey: tokenAMint, isWritable: false, isSigner: false },          // 6: token_mint_a
-            { pubkey: tokenBMint, isWritable: false, isSigner: false },          // 7: token_mint_b
-            { pubkey: inputVault, isWritable: true, isSigner: false },            // 8: token_owner_account_a
-            { pubkey: whirlpoolTokenVaultA, isWritable: true, isSigner: false },  // 9: token_vault_a
-            { pubkey: intermediateVault, isWritable: true, isSigner: false },     // 10: token_owner_account_b
-            { pubkey: whirlpoolTokenVaultB, isWritable: true, isSigner: false },  // 11: token_vault_b
-            { pubkey: tickArray0, isWritable: true, isSigner: false },            // 12: tick_array_0
-            { pubkey: tickArray1, isWritable: true, isSigner: false },            // 13: tick_array_1
-            { pubkey: tickArray2, isWritable: true, isSigner: false },             // 14: tick_array_2
-            { pubkey: whirlpoolOracle, isWritable: false, isSigner: false },       // 15: oracle
-            // Supplemental tick arrays (dynamic part)
-            { pubkey: supplementalTickArray0, isWritable: true, isSigner: false }, // 16
-            { pubkey: supplementalTickArray1, isWritable: true, isSigner: false }, // 17
-            { pubkey: supplementalTickArray2, isWritable: true, isSigner: false }, // 18
-            { pubkey: mockWhirlpoolProgramId, isWritable: false, isSigner: false }, // 19: whirlpool program
-            { pubkey: intermediateVault, isWritable: true, isSigner: false },   // 20: output vault
-        ];
-
-        const initialSource = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
-        const initialIntermediate = (await getAccount(provider.connection, userIntermediateTokenAccount)).amount;
-
-
-        // Platform fee account
-        const tokenAccount = await getOrCreateAssociatedTokenAccount(
-            provider.connection,
-            wallet.payer,
-            intermediateMint,
-            vaultAuthority,
-            true,
-            TOKEN_PROGRAM_ID,
-            ASSOCIATED_TOKEN_PROGRAM_ID
-        );
-
-
-
-        platformFeeAccount = tokenAccount.address;
-
-        await program.methods
-            .route(routePlan, inAmount, quotedOutAmount, slippageBps, platformFeeBps)
-            .accounts({
-                adapterRegistry,
-                vaultAuthority,
-                inputTokenProgram: TOKEN_PROGRAM_ID,
-                outputTokenProgram: TOKEN_PROGRAM_ID,
-                userTransferAuthority: user.publicKey,
-                userSourceTokenAccount,
-                userDestinationTokenAccount: userIntermediateTokenAccount,
-                sourceMint,
-                destinationMint: intermediateMint,
-                platformFeeAccount,
-                systemProgram: SystemProgram.programId
-            })
-            .remainingAccounts(remainingAccounts)
-            .signers([user])
-            .rpc();
-
-        const finalSource = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
-        const finalIntermediate = (await getAccount(provider.connection, userIntermediateTokenAccount)).amount;
-
-        const inputUsed = initialSource - finalSource;
-        const outputReceived = finalIntermediate - initialIntermediate;
-
-
-        assert.equal(
-            finalSource.toString(),
-            (initialSource - BigInt(inAmount.toString())).toString(),
-            "Source balance incorrect"
-        );
-        assert(finalIntermediate > initialIntermediate, "Intermediate balance should increase");
-
-        const minSwapOut = quotedOutAmount
-            .mul(new BN(10000 - slippageBps))
-            .div(new BN(10000));
-
-        assert(
-            finalIntermediate >= initialIntermediate + BigInt(minSwapOut.toString()),
-            "Output amount should meet minimum"
-        );
-
-    });
-
 });

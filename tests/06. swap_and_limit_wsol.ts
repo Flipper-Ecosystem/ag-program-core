@@ -123,32 +123,37 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
 
         await new Promise(resolve => setTimeout(resolve, 1000));
 
+
         // PDAs
-        [vaultAuthority, vaultAuthorityBump] = PublicKey.findProgramAddressSync([Buffer.from("vault_authority")], program.programId);
-
-        // Fund vault_authority with SOL
-        const fundTx = new Transaction().add(
-            SystemProgram.transfer({
-                fromPubkey: wallet.payer.publicKey,
-                toPubkey: vaultAuthority,
-                lamports: 10_000_000_000
-            })
+        [vaultAuthority, vaultAuthorityBump] = PublicKey.findProgramAddressSync(
+            [Buffer.from("vault_authority")],
+            program.programId
         );
-        await provider.sendAndConfirm(fundTx, [wallet.payer]);
 
-        [adapterRegistry, adapterRegistryBump] = PublicKey.findProgramAddressSync([Buffer.from("adapter_registry")], program.programId);
+        [adapterRegistry, adapterRegistryBump] = PublicKey.findProgramAddressSync(
+            [Buffer.from("adapter_registry")],
+            program.programId
+        );
 
-        // Create vault authority
-        await program.methods
-            .createVaultAuthority()
-            .accounts({
-                vaultAuthority,
-                payer: wallet.publicKey,
-                admin: admin.publicKey,
-                systemProgram: SystemProgram.programId,
-            })
-            .signers([wallet.payer])
-            .rpc();
+        // Check if vault_authority already exists
+        const vaultAuthorityInfo = await provider.connection.getAccountInfo(vaultAuthority);
+        if (!vaultAuthorityInfo) {
+            // Create vault authority only if it doesn't exist
+            await program.methods
+                .createVaultAuthority()
+                .accounts({
+                    vaultAuthority,
+                    payer: wallet.publicKey,
+                    admin: admin.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([wallet.payer])
+                .rpc();
+
+            //console.log("✓ Vault authority created");
+        } else {
+            //console.log("✓ Vault authority already exists, reusing");
+        }
 
         // Mints
         sourceMint = NATIVE_MINT; // Use WSOL for sourceMint
@@ -223,16 +228,49 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
         const raydiumAmmConfigKeypair = Keypair.generate();
         raydiumAmmConfig = raydiumAmmConfigKeypair.publicKey;
 
-        await program.methods
-            .initializeAdapterRegistry([], [operator.publicKey])
-            .accounts({
-                adapterRegistry,
-                payer: wallet.publicKey,
-                operator: wallet.publicKey,
-                systemProgram: SystemProgram.programId,
-            })
-            .signers([wallet.payer])
-            .rpc();
+        // Check if adapter registry exists
+        const registryInfo = await provider.connection.getAccountInfo(adapterRegistry);
+        if (!registryInfo) {
+            // Include wallet.publicKey in the operators list during initialization
+            await program.methods
+                .initializeAdapterRegistry([], [operator.publicKey, wallet.publicKey]) // CHANGED: Added wallet.publicKey
+                .accounts({
+                    adapterRegistry,
+                    payer: wallet.publicKey,
+                    operator: wallet.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([wallet.payer])
+                .rpc();
+
+            //console.log("✓ Adapter registry initialized");
+        } else {
+            //console.log("✓ Adapter registry already exists, reusing");
+
+            // If registry exists, we might need to add wallet as operator
+            try {
+                const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
+                const isOperator = registryAccount.operators.some(
+                    (op: PublicKey) => op.equals(operator.publicKey)
+                );
+
+                if (!isOperator) {
+                    //console.log("⚠ Wallet is not an operator, attempting to add...");
+                    // Try to add wallet as operator using another existing operator
+                    await program.methods
+                        .addOperator(operator.publicKey)
+                        .accounts({
+                            adapterRegistry,
+                            authority: wallet.publicKey, // This might fail if wallet isn't already an operator
+                        })
+                        .signers([wallet.payer])
+                        .rpc();
+                    //console.log("✓ Wallet added as operator");
+                }
+            } catch (e) {
+                //console.log("Note: Could not verify/add operator status:", e.message);
+            }
+        }
 
         await program.methods
             .configureAdapter({ name: "raydium", programId: mockRaydiumProgramId, swapType: { raydium: {} } })
@@ -659,17 +697,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             "Tokens not refunded"
         );
 
-        // Close WSOL account if balance is zero or to unwind
-        /*await closeAccount(
-            provider.connection,
-            user,
-            userSourceTokenAccount,
-            user.publicKey,
-            user,
-            [],
-            undefined,
-            TOKEN_PROGRAM_ID
-        );*/
     });
 
     it("5. Route and create order (swap then create limit order)", async () => {
@@ -846,17 +873,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             "Order should be in Open status"
         );
 
-        // Close WSOL account if needed
-        /*await closeAccount(
-            provider.connection,
-            user,
-            userSourceTokenAccount,
-            user.publicKey,
-            user,
-            [],
-            undefined,
-            TOKEN_PROGRAM_ID
-        );*/
     });
 
     it("6. Stop Loss order - execute when price drops", async () => {
@@ -981,106 +997,4 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             TOKEN_PROGRAM_ID
         );
     });
-
-    /*it("7. Swap WSOL to destination token with Raydium adapter", async () => {
-        // Create and fund new WSOL account
-        userWsolTokenAccount = await createAssociatedTokenAccount(
-            provider.connection,
-            user,
-            NATIVE_MINT,
-            user.publicKey,
-            undefined,
-            TOKEN_PROGRAM_ID
-        );
-
-        const wsolAmount = 1_000_000_000; // 1 SOL
-        const wsolTx = new Transaction().add(
-            SystemProgram.transfer({
-                fromPubkey: user.publicKey,
-                toPubkey: userWsolTokenAccount,
-                lamports: wsolAmount
-            }),
-            createSyncNativeInstruction(userWsolTokenAccount, TOKEN_PROGRAM_ID)
-        );
-        await provider.sendAndConfirm(wsolTx, [user]);
-
-        const inAmount = new BN(100_000_000); // 0.1 SOL
-        const quotedOutAmount = new BN(90_000_000);
-        const slippageBps = 100;
-        const platformFeeBps = 0;
-
-        const routePlan = [{ swap: { raydium: {} }, percent: 100, inputIndex: 0, outputIndex: 13 }];
-
-        const inputPoolVault = NATIVE_MINT.toBuffer().compare(destinationMint.toBuffer()) < 0 ? raydiumTokenAVault : raydiumTokenBVault;
-        const outputPoolVault = NATIVE_MINT.toBuffer().compare(destinationMint.toBuffer()) < 0 ? raydiumTokenBVault : raydiumTokenAVault;
-
-        const remainingAccounts = [
-            { pubkey: inputVault, isWritable: true, isSigner: false }, // index 0: input_vault
-            { pubkey: raydiumPoolInfo, isWritable: true, isSigner: false }, // index 1: pool_info
-            { pubkey: raydiumPoolAuthority, isWritable: false, isSigner: false }, // index 2
-            { pubkey: raydiumAmmConfig, isWritable: false, isSigner: false }, // index 3
-            { pubkey: raydiumPoolState, isWritable: true, isSigner: false }, // index 4
-            { pubkey: inputPoolVault, isWritable: true, isSigner: false }, // index 5
-            { pubkey: outputPoolVault, isWritable: true, isSigner: false }, // index 6
-            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false }, // index 7
-            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false }, // index 8
-            { pubkey: NATIVE_MINT, isWritable: false, isSigner: false }, // index 9
-            { pubkey: destinationMint, isWritable: false, isSigner: false }, // index 10
-            { pubkey: raydiumObservationState, isWritable: true, isSigner: false }, // index 11
-            { pubkey: mockRaydiumProgramId, isWritable: false, isSigner: false }, // index 12: program id
-            { pubkey: outputVault, isWritable: true, isSigner: false }, // index 13: output vault
-        ];
-
-        const initialWsolBalance = (await getAccount(provider.connection, userWsolTokenAccount)).amount;
-        const initialDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
-
-        await program.methods
-            .route(routePlan, inAmount, quotedOutAmount, slippageBps, platformFeeBps)
-            .accounts({
-                adapterRegistry,
-                vaultAuthority,
-                inputTokenProgram: TOKEN_PROGRAM_ID,
-                outputTokenProgram: TOKEN_PROGRAM_ID,
-                userTransferAuthority: user.publicKey,
-                userSourceTokenAccount: userWsolTokenAccount,
-                userDestinationTokenAccount,
-                sourceMint: NATIVE_MINT,
-                destinationMint,
-                platformFeeAccount,
-                systemProgram: SystemProgram.programId
-            })
-            .remainingAccounts(remainingAccounts)
-            .signers([user])
-            .rpc();
-
-        const finalWsolBalance = (await getAccount(provider.connection, userWsolTokenAccount)).amount;
-        const finalDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
-
-        const inAmountBN = BigInt(inAmount.toString());
-        const minOutAmount = quotedOutAmount.mul(new BN(10000 - slippageBps)).div(new BN(10000));
-        const expectedOutAmount = BigInt(minOutAmount.toString());
-
-        assert.equal(
-            finalWsolBalance.toString(),
-            (initialWsolBalance - inAmountBN).toString(),
-            "WSOL balance incorrect"
-        );
-
-        assert(
-            finalDestBalance >= (initialDestBalance + expectedOutAmount),
-            "Destination balance incorrect"
-        );
-
-        // Close WSOL account
-        await closeAccount(
-            provider.connection,
-            user,
-            userWsolTokenAccount,
-            user.publicKey,
-            user,
-            [],
-            undefined,
-            TOKEN_PROGRAM_ID
-        );
-    });*/
 });

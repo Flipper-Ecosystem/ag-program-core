@@ -65,17 +65,24 @@ describe("Meteora Adapter - End to End Tests for Swaps", () => {
             program.programId
         );
 
-        // Create vault authority
-        await program.methods
-            .createVaultAuthority()
-            .accounts({
-                vaultAuthority,
-                payer: wallet.publicKey,
-                admin: wallet.publicKey,
-                systemProgram: SystemProgram.programId,
-            })
-            .signers([wallet.payer])
-            .rpc();
+        // Check if vault_authority already exists
+        const vaultAuthorityInfo = await provider.connection.getAccountInfo(vaultAuthority);
+        if (!vaultAuthorityInfo) {
+            // Create vault authority only if it doesn't exist
+            await program.methods
+                .createVaultAuthority()
+                .accounts({
+                    vaultAuthority,
+                    payer: wallet.publicKey,
+                    admin: wallet.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([wallet.payer])
+                .rpc();
+            //console.log("✓ Vault authority created");
+        } else {
+            //console.log("✓ Vault authority already exists");
+        }
 
         // Create mints
         tokenXMint = await createMint(provider.connection, wallet.payer, wallet.publicKey, null, 9);
@@ -199,16 +206,47 @@ describe("Meteora Adapter - End to End Tests for Swaps", () => {
             .rpc();
 
 
-        await program.methods
-            .initializeAdapterRegistry([], [wallet.publicKey])
-            .accounts({
-                adapterRegistry,
-                payer: wallet.publicKey,
-                operator: wallet.publicKey,
-                systemProgram: SystemProgram.programId,
-            })
-            .signers([wallet.payer])
-            .rpc();
+        // Check if adapter registry exists
+        const registryInfo = await provider.connection.getAccountInfo(adapterRegistry);
+        if (!registryInfo) {
+            // Include wallet.publicKey in the operators list during initialization
+            await program.methods
+                .initializeAdapterRegistry([], [wallet.publicKey])
+                .accounts({
+                    adapterRegistry,
+                    payer: wallet.publicKey,
+                    operator: wallet.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([wallet.payer])
+                .rpc();
+            //console.log("✓ Adapter registry initialized");
+        } else {
+            //console.log("✓ Adapter registry already exists");
+
+            // If registry exists, we might need to add wallet as operator
+            try {
+                const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
+                const isOperator = registryAccount.operators.some(
+                    (op: PublicKey) => op.equals(wallet.publicKey)
+                );
+
+                if (!isOperator) {
+                    //console.log("⚠ Wallet is not an operator, attempting to add...");
+                    await program.methods
+                        .addOperator(wallet.publicKey)
+                        .accounts({
+                            adapterRegistry,
+                            authority: wallet.publicKey,
+                        })
+                        .signers([wallet.payer])
+                        .rpc();
+                    //console.log("✓ Wallet added as operator");
+                }
+            } catch (e) {
+                //console.log("Note: Could not verify/add operator status:", e.message);
+            }
+        }
 
         await program.methods
             .configureAdapter({
@@ -221,7 +259,6 @@ describe("Meteora Adapter - End to End Tests for Swaps", () => {
             .rpc();
 
 
-        const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
 
         // Initialize pool info
         [meteoraPoolInfo] = PublicKey.findProgramAddressSync(
