@@ -7,7 +7,11 @@ skip-lint = false
 
 [programs.devnet]
 flipper = "5958qddzZjU34CHUD4bisVBiYgDQ6EREwBLgpbVaSLX7"
+mock_meteora = "699YWVLRa4T5Mxs3iNJGnpwP24JNckt25vW1pEMc5xrA"
 mock_raydium = "FmQ6x78hRZyXJcofk7NSHx9tvPEtEonjsMdAX6FQw7wm"
+mock_whirlpools = "Fa6sgRmBda2UJpBT1tV3bq27JkLjuRYvnt6TxWqAJT5F"
+
+
 
 [programs.localnet]
 flipper = "5958qddzZjU34CHUD4bisVBiYgDQ6EREwBLgpbVaSLX7"
@@ -19,7 +23,7 @@ mock_whirlpools = "Fa6sgRmBda2UJpBT1tV3bq27JkLjuRYvnt6TxWqAJT5F"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
