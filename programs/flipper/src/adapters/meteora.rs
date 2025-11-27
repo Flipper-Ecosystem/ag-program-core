@@ -120,7 +120,7 @@ impl DexAdapter for MeteoraAdapter {
             AccountMeta::new_readonly(remaining_accounts[12].key(), false), // token_y_program
             AccountMeta::new_readonly(remaining_accounts[13].key(), false), // memo_program
             AccountMeta::new_readonly(remaining_accounts[14].key(), false), // event_authority
-            AccountMeta::new_readonly(remaining_accounts[15].key(), false), // program
+            AccountMeta::new(remaining_accounts[15].key(), false), // program
         ];
 
         // Add bin arrays to account metas (dynamic part)

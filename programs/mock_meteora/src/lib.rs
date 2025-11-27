@@ -399,8 +399,8 @@ pub struct Swap2<'info> {
     pub event_authority: UncheckedAccount<'info>,
 
     /// CHECK: The Meteora program itself (self-reference for CPI)
-    #[account(executable)]
-    pub program: UncheckedAccount<'info>
+    #[account(mut, executable)]
+    pub program: UncheckedAccount<'info>,
 }
 
 #[account]

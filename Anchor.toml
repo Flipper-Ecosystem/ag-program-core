@@ -23,7 +23,7 @@ mock_whirlpools = "Fa6sgRmBda2UJpBT1tV3bq27JkLjuRYvnt6TxWqAJT5F"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
