@@ -639,6 +639,7 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
                 outputMint: destinationMint,
                 platformFeeAccount,
                 operator: operator.publicKey,
+                systemProgram: SystemProgram.programId,
             })
             .remainingAccounts(remainingAccounts)
             .signers([operator])
@@ -647,8 +648,9 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
         const finalDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
         assert(finalDestBalance > initialDestBalance, "Destination balance should increase");
 
-        const orderAccount = await program.account.limitOrder.fetch(limitOrder);
-        assert.equal(orderAccount.status.filled !== undefined, true);
+        // Verify order account is closed after execution (rent goes to operator)
+        const orderAccountInfo = await provider.connection.getAccountInfo(limitOrder);
+        assert.equal(orderAccountInfo, null, "Order account should be closed after execution");
 
         //console.log("✓ Limit order executed successfully");
     });
@@ -1020,8 +1022,9 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
 
         assert(finalDestBalance > initialDestBalance, "Stop loss executed - destination balance increased");
 
-        const orderAccount = await program.account.limitOrder.fetch(limitOrder);
-        assert.equal(orderAccount.status.filled !== undefined, true, "Order should be filled");
+        // Verify order account is closed after execution
+        const orderAccountInfo = await provider.connection.getAccountInfo(limitOrder);
+        assert.equal(orderAccountInfo, null, "Order account should be closed after execution");
 
         //console.log("✓ Stop loss order executed successfully");
     });

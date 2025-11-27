@@ -617,6 +617,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 outputMint: destinationMint,
                 platformFeeAccount,
                 operator: operator.publicKey,
+                systemProgram: SystemProgram.programId,
             })
             .remainingAccounts(remainingAccounts)
             .signers([operator])
@@ -625,8 +626,9 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
         const finalDestBalance = (await getAccount(provider.connection, userDestinationTokenAccount)).amount;
         assert(finalDestBalance > initialDestBalance, "Destination balance should increase");
 
-        const orderAccount = await program.account.limitOrder.fetch(limitOrder);
-        assert.equal(orderAccount.status.filled !== undefined, true);
+        // Verify order account is closed after execution (rent goes to operator)
+        const orderAccountInfo = await provider.connection.getAccountInfo(limitOrder);
+        assert.equal(orderAccountInfo, null, "Order account should be closed after execution");
     });
 
     it("4. Cancel limit order", async () => {
@@ -973,6 +975,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 outputMint: destinationMint,
                 platformFeeAccount,
                 operator: operator.publicKey,
+                systemProgram: SystemProgram.programId,
             })
             .remainingAccounts(remainingAccounts)
             .signers([operator])
@@ -982,8 +985,9 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
 
         assert(finalDestBalance > initialDestBalance, "Stop loss executed - destination balance increased");
 
-        const orderAccount = await program.account.limitOrder.fetch(limitOrder);
-        assert.equal(orderAccount.status.filled !== undefined, true, "Order should be filled");
+        // Verify order account is closed after execution
+        const orderAccountInfo = await provider.connection.getAccountInfo(limitOrder);
+        assert.equal(orderAccountInfo, null, "Order account should be closed after execution");
 
         // Close WSOL account
         await closeAccount(
@@ -996,5 +1000,393 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             undefined,
             TOKEN_PROGRAM_ID
         );
+    });
+
+    describe("7. Limit order account closure tests", () => {
+        // Recreate userSourceTokenAccount if it was closed in previous tests
+        before(async () => {
+            try {
+                await getAccount(provider.connection, userSourceTokenAccount);
+            } catch {
+                // Recreate WSOL account if it was closed
+                userSourceTokenAccount = await createAssociatedTokenAccount(
+                    provider.connection,
+                    user,
+                    sourceMint,
+                    user.publicKey
+                );
+
+                // Fund userSource with WSOL
+                const wsolAmount = 1_000_000_000; // 1 SOL
+                const wsolTx = new Transaction().add(
+                    SystemProgram.transfer({
+                        fromPubkey: user.publicKey,
+                        toPubkey: userSourceTokenAccount,
+                        lamports: wsolAmount
+                    }),
+                    createSyncNativeInstruction(userSourceTokenAccount, TOKEN_PROGRAM_ID)
+                );
+                await provider.sendAndConfirm(wsolTx, [user]);
+            }
+        });
+
+        it("7.1. Execute limit order - verify account is closed and operator receives rent", async () => {
+            const nonce = new BN(Date.now());
+            const inputAmount = new BN(50_000_000);
+            const minOutputAmount = new BN(30_000_000);
+            const triggerPriceBps = 500;
+            const triggerType = { takeProfit: {} };
+            const expiry = new BN(Math.floor(Date.now() / 1000) + 3600);
+            const slippageBps = 300;
+
+            const [limitOrder] = PublicKey.findProgramAddressSync(
+                [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+                program.programId
+            );
+
+            const [orderVault] = PublicKey.findProgramAddressSync(
+                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .createLimitOrder(
+                    nonce,
+                    inputAmount,
+                    minOutputAmount,
+                    triggerPriceBps,
+                    triggerType,
+                    expiry,
+                    slippageBps
+                )
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    userInputTokenAccount: userSourceTokenAccount,
+                    userDestinationTokenAccount: userDestinationTokenAccount,
+                    inputMint: sourceMint,
+                    outputMint: destinationMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    outputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([user])
+                .rpc();
+
+            // Get initial operator balance
+            const initialOperatorBalance = await provider.connection.getBalance(operator.publicKey);
+            
+            // Verify order account exists before execution
+            const orderAccountBefore = await program.account.limitOrder.fetch(limitOrder);
+            assert.equal(orderAccountBefore.status.open !== undefined, true, "Order should be open");
+
+            // Use the same quotedOutAmount as in test 3, which is known to work
+            // This value satisfies: (39_486_167 * 10000) / 30_000_000 = 13162 >= 10500 (10000 + 500)
+            const quotedOutAmount = new BN(39_486_167);
+            const platformFeeBps = 10;
+
+            const routePlan = [
+                { swap: { raydium: {} }, percent: 100, inputIndex: 0, outputIndex: 13 }
+            ];
+
+            const inputPoolVault = sourceMint.toBuffer().compare(destinationMint.toBuffer()) < 0
+                ? raydiumTokenAVault
+                : raydiumTokenBVault;
+            const outputPoolVault = sourceMint.toBuffer().compare(destinationMint.toBuffer()) < 0
+                ? raydiumTokenBVault
+                : raydiumTokenAVault;
+
+            const remainingAccounts = [
+                { pubkey: orderVault, isWritable: true, isSigner: false },
+                { pubkey: raydiumPoolInfo, isWritable: true, isSigner: false },
+                { pubkey: raydiumPoolAuthority, isWritable: false, isSigner: false },
+                { pubkey: raydiumAmmConfig, isWritable: false, isSigner: false },
+                { pubkey: raydiumPoolState, isWritable: true, isSigner: false },
+                { pubkey: inputPoolVault, isWritable: true, isSigner: false },
+                { pubkey: outputPoolVault, isWritable: true, isSigner: false },
+                { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+                { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+                { pubkey: sourceMint, isWritable: false, isSigner: false },
+                { pubkey: destinationMint, isWritable: false, isSigner: false },
+                { pubkey: raydiumObservationState, isWritable: true, isSigner: false },
+                { pubkey: mockRaydiumProgramId, isWritable: false, isSigner: false },
+                { pubkey: outputVault, isWritable: true, isSigner: false },
+            ];
+
+            // Execute the order
+            await program.methods
+                .executeLimitOrder(routePlan, quotedOutAmount, platformFeeBps)
+                .accounts({
+                    adapterRegistry,
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    outputTokenProgram: TOKEN_PROGRAM_ID,
+                    userDestinationTokenAccount,
+                    inputMint: sourceMint,
+                    outputMint: destinationMint,
+                    platformFeeAccount,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .remainingAccounts(remainingAccounts)
+                .signers([operator])
+                .rpc();
+
+            // Verify order account is closed
+            const orderAccountInfo = await provider.connection.getAccountInfo(limitOrder);
+            assert.equal(orderAccountInfo, null, "Order account should be closed after execution");
+
+            // Verify operator received rent
+            const finalOperatorBalance = await provider.connection.getBalance(operator.publicKey);
+            assert(
+                finalOperatorBalance > initialOperatorBalance,
+                "Operator should receive rent from closed order account"
+            );
+        });
+
+        it("7.2. Cancel limit order - verify operator can close it and receive rent", async () => {
+            const nonce = new BN(Date.now());
+            const inputAmount = new BN(50_000_000);
+            const minOutputAmount = new BN(45_000_000);
+            const triggerPriceBps = 1000;
+            const triggerType = { takeProfit: {} };
+            const expiry = new BN(Math.floor(Date.now() / 1000) + 3600);
+            const slippageBps = 300;
+
+            const [limitOrder] = PublicKey.findProgramAddressSync(
+                [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+                program.programId
+            );
+
+            const [orderVault] = PublicKey.findProgramAddressSync(
+                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .createLimitOrder(
+                    nonce,
+                    inputAmount,
+                    minOutputAmount,
+                    triggerPriceBps,
+                    triggerType,
+                    expiry,
+                    slippageBps
+                )
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    userInputTokenAccount: userSourceTokenAccount,
+                    userDestinationTokenAccount: userDestinationTokenAccount,
+                    inputMint: sourceMint,
+                    outputMint: destinationMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    outputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([user])
+                .rpc();
+
+            // Cancel the order (status changes to Cancelled, but account is not closed)
+            await program.methods
+                .cancelLimitOrder()
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    userInputTokenAccount: userSourceTokenAccount,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                })
+                .signers([user])
+                .rpc();
+
+            // Verify order is cancelled but account still exists
+            const orderAccountAfterCancel = await program.account.limitOrder.fetch(limitOrder);
+            assert.equal(orderAccountAfterCancel.status.cancelled !== undefined, true, "Order should be cancelled");
+            
+            const orderAccountInfoAfterCancel = await provider.connection.getAccountInfo(limitOrder);
+            assert.notEqual(orderAccountInfoAfterCancel, null, "Order account should still exist after cancel");
+
+            // Get initial operator balance
+            const initialOperatorBalance = await provider.connection.getBalance(operator.publicKey);
+
+            // Operator closes the cancelled order
+            await program.methods
+                .closeLimitOrderByOperator()
+                .accounts({
+                    adapterRegistry,
+                    limitOrder,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([operator])
+                .rpc();
+
+            // Verify order account is now closed
+            const orderAccountInfoAfterClose = await provider.connection.getAccountInfo(limitOrder);
+            assert.equal(orderAccountInfoAfterClose, null, "Order account should be closed by operator");
+
+            // Verify operator received rent
+            const finalOperatorBalance = await provider.connection.getBalance(operator.publicKey);
+            assert(
+                finalOperatorBalance > initialOperatorBalance,
+                "Operator should receive rent from closed order account"
+            );
+        });
+
+        it("7.3. Close limit order by operator - should fail for open order", async () => {
+            const nonce = new BN(Date.now());
+            const inputAmount = new BN(50_000_000);
+            const minOutputAmount = new BN(45_000_000);
+            const triggerPriceBps = 1000;
+            const triggerType = { takeProfit: {} };
+            const expiry = new BN(Math.floor(Date.now() / 1000) + 3600);
+            const slippageBps = 300;
+
+            const [limitOrder] = PublicKey.findProgramAddressSync(
+                [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+                program.programId
+            );
+
+            const [orderVault] = PublicKey.findProgramAddressSync(
+                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .createLimitOrder(
+                    nonce,
+                    inputAmount,
+                    minOutputAmount,
+                    triggerPriceBps,
+                    triggerType,
+                    expiry,
+                    slippageBps
+                )
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    userInputTokenAccount: userSourceTokenAccount,
+                    userDestinationTokenAccount: userDestinationTokenAccount,
+                    inputMint: sourceMint,
+                    outputMint: destinationMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    outputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([user])
+                .rpc();
+
+            // Try to close open order - should fail
+            try {
+                await program.methods
+                    .closeLimitOrderByOperator()
+                    .accounts({
+                        adapterRegistry,
+                        limitOrder,
+                        operator: operator.publicKey,
+                        systemProgram: SystemProgram.programId,
+                    })
+                    .signers([operator])
+                    .rpc();
+                assert.fail("Should have failed - cannot close open order");
+            } catch (error: any) {
+                assert(
+                    error.message.includes("InvalidOrderStatus") || error.message.includes("constraint"),
+                    "Should fail with InvalidOrderStatus error"
+                );
+            }
+        });
+
+        it("7.4. Close limit order by operator - should fail for non-operator", async () => {
+            const nonce = new BN(Date.now());
+            const inputAmount = new BN(50_000_000);
+            const minOutputAmount = new BN(45_000_000);
+            const triggerPriceBps = 1000;
+            const triggerType = { takeProfit: {} };
+            const expiry = new BN(Math.floor(Date.now() / 1000) + 3600);
+            const slippageBps = 300;
+
+            const [limitOrder] = PublicKey.findProgramAddressSync(
+                [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+                program.programId
+            );
+
+            const [orderVault] = PublicKey.findProgramAddressSync(
+                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                program.programId
+            );
+
+            await program.methods
+                .createLimitOrder(
+                    nonce,
+                    inputAmount,
+                    minOutputAmount,
+                    triggerPriceBps,
+                    triggerType,
+                    expiry,
+                    slippageBps
+                )
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    userInputTokenAccount: userSourceTokenAccount,
+                    userDestinationTokenAccount: userDestinationTokenAccount,
+                    inputMint: sourceMint,
+                    outputMint: destinationMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    outputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([user])
+                .rpc();
+
+            // Cancel the order
+            await program.methods
+                .cancelLimitOrder()
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    userInputTokenAccount: userSourceTokenAccount,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                })
+                .signers([user])
+                .rpc();
+
+            // Try to close with non-operator (user) - should fail
+            try {
+                await program.methods
+                    .closeLimitOrderByOperator()
+                    .accounts({
+                        adapterRegistry,
+                        limitOrder,
+                        operator: user.publicKey,
+                        systemProgram: SystemProgram.programId,
+                    })
+                    .signers([user])
+                    .rpc();
+                assert.fail("Should have failed - user is not an operator");
+            } catch (error: any) {
+                assert(
+                    error.message.includes("InvalidOperator") || error.message.includes("constraint"),
+                    "Should fail with InvalidOperator error"
+                );
+            }
+        });
     });
 });

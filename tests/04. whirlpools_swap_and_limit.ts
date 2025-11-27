@@ -549,6 +549,34 @@ describe("Flipper Swap Protocol - Whirlpools Swap and Limit Orders", () => {
         const tokenOwnerAccountA = actualInputVault;
         const tokenOwnerAccountB = actualIntermediateVault;
 
+        // Ensure vaults have sufficient balance for the swap
+        // actualInputVault should contain tokenAMint (which is actualSourceMint)
+        // Check and fund actualInputVault if needed
+        try {
+            const vaultBalance = await getAccount(provider.connection, actualInputVault);
+            if (vaultBalance.amount < BigInt(inputAmount.toString())) {
+                // actualInputVault is a vault for actualSourceMint, which equals tokenAMint
+                await mintTo(
+                    provider.connection,
+                    wallet.payer,
+                    actualSourceMint, // This equals tokenAMint
+                    actualInputVault,
+                    wallet.publicKey,
+                    1_000_000_000_000
+                );
+            }
+        } catch (e) {
+            // Vault might not exist, create and fund it
+            await mintTo(
+                provider.connection,
+                wallet.payer,
+                actualSourceMint, // This equals tokenAMint
+                actualInputVault,
+                wallet.publicKey,
+                1_000_000_000_000
+            );
+        }
+
         //console.log(`token_owner_account_a (tokenA): ${tokenOwnerAccountA.toString()}`);
         //console.log(`token_owner_account_b (tokenB): ${tokenOwnerAccountB.toString()}`);
 
