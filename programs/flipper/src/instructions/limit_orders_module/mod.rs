@@ -283,9 +283,10 @@ pub struct ExecuteLimitOrder<'info> {
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
 
-    /// Limit order to execute
+    /// Limit order to execute (will be closed, rent goes to operator)
     #[account(
         mut,
+        close = operator,
         constraint = limit_order.status == OrderStatus::Open @ ErrorCode::InvalidOrderStatus,
         constraint = limit_order.input_vault == input_vault.key() @ ErrorCode::InvalidVaultAddress
     )]
@@ -318,12 +319,15 @@ pub struct ExecuteLimitOrder<'info> {
     #[account(mut)]
     pub platform_fee_account: Option<InterfaceAccount<'info, TokenAccount>>,
 
-    /// Operator executing the order (must be registered)
+    /// Operator executing the order (must be registered, receives rent from closed order)
     #[account(
+        mut,
         signer,
         constraint = adapter_registry.operators.contains(&operator.key()) @ ErrorCode::InvalidOperator
     )]
     pub operator: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
 /// Executes a limit order when trigger conditions are met
@@ -508,10 +512,9 @@ pub struct CancelLimitOrder<'info> {
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
 
-    /// Limit order to cancel (will be closed)
+    /// Limit order to cancel (status will be set to Cancelled, operator can close it later to collect rent)
     #[account(
         mut,
-        close = creator,
         constraint = limit_order.status == OrderStatus::Open @ ErrorCode::InvalidOrderStatus,
         constraint = limit_order.creator == creator.key() @ ErrorCode::UnauthorizedAdmin
     )]
@@ -577,6 +580,47 @@ pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>) -> Result<()> {
     Ok(())
 }
 
+/// Close limit order by operator instruction accounts
+#[event_cpi]
+#[derive(Accounts)]
+pub struct CloseLimitOrderByOperator<'info> {
+    /// Adapter registry for operator validation
+    #[account(
+        seeds = [b"adapter_registry"],
+        bump
+    )]
+    pub adapter_registry: Account<'info, AdapterRegistry>,
+
+    /// Limit order to close (must be filled or cancelled)
+    #[account(
+        mut,
+        close = operator,
+        constraint = limit_order.status == OrderStatus::Filled || limit_order.status == OrderStatus::Cancelled @ ErrorCode::InvalidOrderStatus
+    )]
+    pub limit_order: Account<'info, LimitOrder>,
+
+    /// Operator closing the order (must be registered, receives rent)
+    #[account(
+        mut,
+        signer,
+        constraint = adapter_registry.operators.contains(&operator.key()) @ ErrorCode::InvalidOperator
+    )]
+    pub operator: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Closes a filled or cancelled limit order and collects rent for the operator
+pub fn close_limit_order_by_operator(ctx: Context<CloseLimitOrderByOperator>) -> Result<()> {
+    let order_key = ctx.accounts.limit_order.key();
+    let operator_key = ctx.accounts.operator.key();
+    let status = ctx.accounts.limit_order.status as u8;
+
+    msg!("Closing limit order {} by operator {}, status: {}", order_key, operator_key, status);
+
+    // Account is automatically closed by Anchor and rent is sent to operator
+    Ok(())
+}
 
 /// Route and create order instruction accounts
 #[event_cpi]

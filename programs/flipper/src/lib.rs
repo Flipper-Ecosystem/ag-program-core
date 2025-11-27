@@ -147,6 +147,13 @@ pub mod flipper {
         instructions::cancel_limit_order(ctx)
     }
 
+    /// Closes a filled or cancelled limit order by operator and collects rent
+    pub fn close_limit_order_by_operator(
+        ctx: Context<CloseLimitOrderByOperator>,
+    ) -> Result<()> {
+        instructions::close_limit_order_by_operator(ctx)
+    }
+
     pub fn route_and_create_order<'info>(
         ctx: Context<'_, '_, 'info, 'info, RouteAndCreateOrder<'info>>,
         order_nonce: u64,
