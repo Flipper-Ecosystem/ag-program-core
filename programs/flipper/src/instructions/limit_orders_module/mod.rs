@@ -512,9 +512,10 @@ pub struct CancelLimitOrder<'info> {
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
 
-    /// Limit order to cancel (status will be set to Cancelled, operator can close it later to collect rent)
+    /// Limit order to cancel (will be closed, rent goes to creator, operator can also close cancelled orders)
     #[account(
         mut,
+        close = creator,
         constraint = limit_order.status == OrderStatus::Open @ ErrorCode::InvalidOrderStatus,
         constraint = limit_order.creator == creator.key() @ ErrorCode::UnauthorizedAdmin
     )]
@@ -568,15 +569,14 @@ pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>) -> Result<()> {
         ctx.accounts.input_mint.decimals,
     )?;
 
-    // Update order status to cancelled
-    ctx.accounts.limit_order.status = OrderStatus::Cancelled;
-
-    // Emit cancellation event
+    // Emit cancellation event before account is closed
     emit_cpi!(LimitOrderCancelled {
         order: ctx.accounts.limit_order.key(),
         creator: ctx.accounts.creator.key(),
     });
 
+    // Account will be closed automatically and rent transferred to creator due to `close = creator`
+    // Note: Operator can also close cancelled orders if they weren't closed by creator
     Ok(())
 }
 
@@ -619,6 +619,11 @@ pub fn close_limit_order_by_operator(ctx: Context<CloseLimitOrderByOperator>) ->
     msg!("Closing limit order {} by operator {}, status: {}", order_key, operator_key, status);
 
     // Account is automatically closed by Anchor and rent is sent to operator
+    emit_cpi!(LimitOrderClosed {
+        order: order_key,
+        closer: operator_key,
+        status,
+    });
     Ok(())
 }
 

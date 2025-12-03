@@ -164,6 +164,13 @@ pub struct LimitOrderCancelled {
 }
 
 #[event]
+pub struct LimitOrderClosed {
+    pub order: Pubkey,
+    pub closer: Pubkey,
+    pub status: u8,
+}
+
+#[event]
 pub struct RouteAndCreateOrderEvent {
     pub order: Pubkey,
     pub swap_input_mint: Pubkey,
