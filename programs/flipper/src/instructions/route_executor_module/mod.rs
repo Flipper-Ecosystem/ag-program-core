@@ -100,12 +100,31 @@ pub fn execute_route<'info>(
         let output_mint = output_vault_data.mint;
         drop(account_data);
 
+        // Check if this is part of a partial swap (multiple steps share the same input_index)
+        let is_partial_swap_step = step.percent < 100 && route_plan.iter().any(|s| 
+            s.input_index == step.input_index && s.percent < 100
+        );
+
+        // Check if there are more steps with the same input_index after this one
+        let has_more_partial_steps = is_partial_swap_step && route_plan.iter().skip(i + 1).any(|s| 
+            s.input_index == step.input_index
+        );
+
         // Update amounts: accumulate only if output mint matches destination_mint
         if output_mint == destination_mint {
             total_output_amount = total_output_amount.saturating_add(swap_result.output_amount);
         } else {
             // For non-final steps in multi-hop, update current_amount
-            current_amount = swap_result.output_amount;
+            // BUT: Don't update for partial swap steps that output to intermediate tokens
+            // if there are more partial steps with the same input_index, as those steps
+            // still need to use the original input amount
+            if !has_more_partial_steps {
+                // This is the last step with this input_index, safe to update current_amount
+                current_amount = swap_result.output_amount;
+            }
+            // For partial swap steps with intermediate output and more steps to come,
+            // keep current_amount unchanged so subsequent partial steps can still
+            // calculate based on original input
         }
 
         // Record swap event
