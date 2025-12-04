@@ -74,6 +74,12 @@ impl DexAdapter for WhirlpoolAdapter {
 
         let adapter_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..end_index];
 
+        // Validate pool_info (index 0) - check that pool is enabled
+        let pool_info = Account::<PoolInfo>::try_from(&adapter_accounts[0])?;
+        if !pool_info.enabled {
+            return Err(ErrorCode::PoolDisabled.into());
+        }
+
         // Record initial output token balance
         let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
         let initial_output_amount = output_vault_data.amount;
