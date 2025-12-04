@@ -236,8 +236,8 @@ impl DexAdapter for WhirlpoolAdapter {
         }
 
 
-        // Validate tick arrays
-        for i in 10..=12 {
+        // Validate tick arrays (indices 11, 12, 13 match execute_swap)
+        for i in 11..=13 {
             if adapter_accounts[i].key() == Pubkey::default() {
                 return Err(ErrorCode::InvalidAccount.into());
             }

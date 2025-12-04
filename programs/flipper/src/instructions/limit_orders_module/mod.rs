@@ -367,6 +367,20 @@ pub fn execute_limit_order<'info>(
 
     let in_amount = ctx.accounts.limit_order.input_amount;
 
+    // SECURITY: Validate that route_plan[0].input_index points to the correct input vault
+    // This prevents operators from draining other orders' vaults by pointing to a different vault
+    if route_plan.is_empty() {
+        return Err(ErrorCode::EmptyRoute.into());
+    }
+    let route_input_index = route_plan[0].input_index as usize;
+    if route_input_index >= ctx.remaining_accounts.len() {
+        return Err(ErrorCode::InvalidAccountIndex.into());
+    }
+    let route_input_vault = &ctx.remaining_accounts[route_input_index];
+    if route_input_vault.key() != ctx.accounts.input_vault.key() {
+        return Err(ErrorCode::InvalidVaultAddress.into());
+    }
+
     // Validate swap route
     route_validator_module::validate_route(
         &ctx.accounts.adapter_registry,

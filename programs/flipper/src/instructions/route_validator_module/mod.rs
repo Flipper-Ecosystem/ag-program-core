@@ -109,8 +109,9 @@ pub fn validate_route<'info>(
             return Err(ErrorCode::InvalidAccountIndex.into());
         }
 
-        // Validate output_index for non-final steps
-        if i < route_plan.len() - 1 && step.output_index as usize >= remaining_accounts.len() {
+        // Validate output_index for all steps (including final step)
+        // This prevents out-of-bounds access when accessing remaining_accounts[output_index]
+        if step.output_index as usize >= remaining_accounts.len() {
             return Err(ErrorCode::InvalidAccountIndex.into());
         }
 
