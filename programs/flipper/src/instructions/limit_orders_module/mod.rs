@@ -562,7 +562,11 @@ pub struct CancelLimitOrder<'info> {
     pub limit_order: Account<'info, LimitOrder>,
 
     /// Vault holding input tokens
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = input_vault.key() == limit_order.input_vault @ ErrorCode::InvalidVaultAddress,
+        constraint = input_vault.mint == limit_order.input_mint @ ErrorCode::InvalidMint
+    )]
     pub input_vault: InterfaceAccount<'info, TokenAccount>,
 
     /// User's account to receive refunded tokens
@@ -573,7 +577,10 @@ pub struct CancelLimitOrder<'info> {
     )]
     pub user_input_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    /// Input token mint
+    /// Input token mint (must match limit_order.input_mint)
+    #[account(
+        constraint = input_mint.key() == limit_order.input_mint @ ErrorCode::InvalidMint
+    )]
     pub input_mint: InterfaceAccount<'info, Mint>,
     /// Token program for input tokens
     pub input_token_program: Interface<'info, TokenInterface>,
