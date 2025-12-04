@@ -435,7 +435,8 @@ pub fn execute_limit_order<'info>(
     }
 
     // Collect platform fee if specified
-    let mut fee_amount = 0;
+    let mut fee_amount = 0u64;
+    let mut fee_account: Option<Pubkey> = None;
     if let Some(platform_fee_account) = &ctx.accounts.platform_fee_account {
         if platform_fee_account.mint != ctx.accounts.output_mint.key() {
             return Err(ErrorCode::InvalidPlatformFeeMint.into());
@@ -464,6 +465,7 @@ pub fn execute_limit_order<'info>(
                 amount: fee_amount,
             });
 
+            fee_account = Some(platform_fee_account.key());
             output_amount = output_amount.checked_sub(fee_amount).ok_or(ErrorCode::InvalidCalculation)?;
         }
     }
@@ -496,6 +498,21 @@ pub fn execute_limit_order<'info>(
         fee_amount,
         trigger_type: ctx.accounts.limit_order.trigger_type as u8,
         min_output_amount: ctx.accounts.limit_order.min_output_amount,
+    });
+
+    // Emit global limit order swap event
+    emit_cpi!(LimitOrderSwapEvent {
+        order: ctx.accounts.limit_order.key(),
+        sender: ctx.accounts.limit_order.creator,
+        recipient: ctx.accounts.user_destination_token_account.key(),
+        executor: ctx.accounts.operator.key(),
+        input_mint: ctx.accounts.input_mint.key(),
+        output_mint: ctx.accounts.output_mint.key(),
+        input_amount: in_amount,
+        output_amount,
+        fee_amount,
+        fee_account,
+        trigger_type: ctx.accounts.limit_order.trigger_type as u8,
     });
 
     Ok(output_amount)
@@ -854,6 +871,7 @@ pub fn route_and_create_order<'info>(
     // ===== STEP 5: COLLECT PLATFORM FEE FROM SWAP =====
 
     let mut fee_amount = 0u64;
+    let mut fee_account: Option<Pubkey> = None;
     if let Some(platform_fee_account) = &ctx.accounts.platform_fee_account {
         require!(
             platform_fee_account.mint == ctx.accounts.output_mint.key(),
@@ -883,11 +901,25 @@ pub fn route_and_create_order<'info>(
                 amount: fee_amount,
             });
 
+            fee_account = Some(platform_fee_account.key());
             out_amount = out_amount
                 .checked_sub(fee_amount)
                 .ok_or(ErrorCode::InvalidCalculation)?;
         }
     }
+
+    // Emit global router swap event for the swap part
+    emit_cpi!(RouterSwapEvent {
+        sender: ctx.accounts.creator.key(),
+        recipient: ctx.accounts.input_vault.key(), // Swap output goes to order vault
+        input_mint: ctx.accounts.input_mint.key(),
+        output_mint: ctx.accounts.output_mint.key(),
+        input_amount: in_amount,
+        output_amount: out_amount,
+        fee_amount,
+        fee_account,
+        slippage_bps,
+    });
 
     // ===== STEP 6: CREATE LIMIT ORDER =====
 

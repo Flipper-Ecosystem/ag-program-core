@@ -172,8 +172,10 @@ pub fn route<'info>(
     }
 
     // Apply platform fee if specified
+    let mut fee_amount = 0u64;
+    let mut fee_account: Option<Pubkey> = None;
     if let Some(platform_fee_account) = &ctx.accounts.platform_fee_account {
-        let fee_amount = (output_amount as u128 * platform_fee_bps as u128 / 10_000) as u64;
+        fee_amount = (output_amount as u128 * platform_fee_bps as u128 / 10_000) as u64;
         if fee_amount > 0 {
             // Transfer fee using output token program
             transfer_checked(
@@ -198,6 +200,7 @@ pub fn route<'info>(
                 amount: fee_amount,
             });
 
+            fee_account = Some(platform_fee_account.key());
             output_amount = output_amount.checked_sub(fee_amount).ok_or(ErrorCode::InvalidCalculation)?;
         }
     }
@@ -230,6 +233,19 @@ pub fn route<'info>(
         output_amount,
         ctx.accounts.destination_mint.decimals,
     )?;
+
+    // Emit global router swap event
+    emit_cpi!(RouterSwapEvent {
+        sender: ctx.accounts.user_transfer_authority.key(),
+        recipient: ctx.accounts.user_destination_token_account.key(),
+        input_mint: ctx.accounts.source_mint.key(),
+        output_mint: ctx.accounts.destination_mint.key(),
+        input_amount: in_amount,
+        output_amount,
+        fee_amount,
+        fee_account,
+        slippage_bps,
+    });
 
     Ok(output_amount)
 }
