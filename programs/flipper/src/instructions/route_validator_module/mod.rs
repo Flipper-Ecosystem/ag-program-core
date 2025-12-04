@@ -147,18 +147,18 @@ pub fn validate_route<'info>(
             }
         }
 
-        // Check for multi-hop: input vault matches a previous output vault
+        // Check for multi-hop: input vault matches the immediately previous step's output vault
+        // Note: Since partial swaps with the same input vault must use the same output vault,
+        // multi-hop always chains from the immediately previous step (i-1)
         if i > 0 {
-            for prev_step in route_plan.iter().take(i) {
-                let prev_output_vault = &remaining_accounts[prev_step.output_index as usize];
-                if input_vault_account.key() == prev_output_vault.key() {
-                    is_multi_hop = true;
-                    break;
-                }
+            let prev_step = &route_plan[i - 1];
+            let prev_output_vault = &remaining_accounts[prev_step.output_index as usize];
+            if input_vault_account.key() == prev_output_vault.key() {
+                is_multi_hop = true;
             }
         }
 
-        // Validate multi-hop: ensure input mint matches previous output mint
+        // Validate multi-hop: ensure input mint matches previous step's output mint
         if is_multi_hop && i > 0 {
             let account_data = input_vault_account.try_borrow_data()?;
             let input_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
