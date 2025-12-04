@@ -50,7 +50,8 @@ pub struct LimitOrder {
     /// Minimum output amount (baseline for trigger calculation)
     pub min_output_amount: u64,
     /// Trigger price deviation from min_output_amount in basis points (1000 = 10%)
-    pub trigger_price_bps: u16,
+    /// Supports up to 1000% (100,000 bps) for TakeProfit orders
+    pub trigger_price_bps: u32,
     /// Type of trigger (TakeProfit or StopLoss)
     pub trigger_type: TriggerType,
     /// Order expiration timestamp
@@ -65,7 +66,7 @@ pub struct LimitOrder {
 
 impl LimitOrder {
 
-    pub const SPACE: usize = 8 + 191;
+    pub const SPACE: usize = 8 + 193; // Updated: trigger_price_bps changed from u16 (2 bytes) to u32 (4 bytes) = +2 bytes
     /// Checks if order should be executed based on current price
     ///
     /// # Arguments
@@ -193,7 +194,7 @@ pub fn create_limit_order(
     nonce: u64,
     input_amount: u64,
     min_output_amount: u64,
-    trigger_price_bps: u16,
+    trigger_price_bps: u32,
     trigger_type: TriggerType,
     expiry: i64,
     slippage_bps: u16
@@ -207,6 +208,24 @@ pub fn create_limit_order(
     }
     if trigger_price_bps == 0 {
         return Err(ErrorCode::InvalidTriggerPrice.into());
+    }
+    // Validate upper bound based on trigger type
+    // For StopLoss orders: trigger_price_bps must not exceed 10,000 (100%)
+    // because 10_000 - trigger_price_bps would underflow in should_execute
+    // For TakeProfit orders: allow up to 100,000 (1000%)
+    // 10_000 + 100_000 = 110_000 fits in u64, so no overflow risk
+    match trigger_type {
+        TriggerType::StopLoss => {
+            if trigger_price_bps > 10_000 {
+                return Err(ErrorCode::InvalidTriggerPrice.into());
+            }
+        },
+        TriggerType::TakeProfit => {
+            // Allow up to 100,000 (1000%) for TakeProfit orders
+            if trigger_price_bps > 100_000 {
+                return Err(ErrorCode::InvalidTriggerPrice.into());
+            }
+        }
     }
     if expiry <= Clock::get()?.unix_timestamp {
         return Err(ErrorCode::InvalidExpiry.into());
@@ -781,7 +800,7 @@ pub fn route_and_create_order<'info>(
     slippage_bps: u16,
     platform_fee_bps: u8,
     order_min_output_amount: u64,
-    order_trigger_price_bps: u16,
+    order_trigger_price_bps: u32,
     order_expiry: i64,
     order_slippage_bps: u16,
 ) -> Result<(u64, Pubkey)> {
@@ -796,6 +815,13 @@ pub fn route_and_create_order<'info>(
     require!(order_min_output_amount > 0, ErrorCode::InvalidAmount);
     require!(
         order_trigger_price_bps > 0,
+        ErrorCode::InvalidTriggerPrice
+    );
+    // Validate upper bound: route_and_create_order always creates TakeProfit orders
+    // Allow up to 100,000 (1000%) for TakeProfit orders
+    // 10_000 + 100_000 = 110_000 fits in u64, so no overflow risk
+    require!(
+        order_trigger_price_bps <= 100_000,
         ErrorCode::InvalidTriggerPrice
     );
     require!(

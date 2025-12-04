@@ -155,7 +155,7 @@ pub struct LimitOrderCreated {
     pub output_mint: Pubkey,
     pub input_amount: u64,
     pub min_output_amount: u64,
-    pub trigger_price_bps: u16,
+    pub trigger_price_bps: u32,
     pub trigger_type: u8,
     pub expiry: i64,
 }
