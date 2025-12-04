@@ -772,7 +772,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 limitOrder,
                 inputVault: orderVault,
                 userInputAccount: userSourceTokenAccount,
-                userDestinationAccount: userDestinationTokenAccount,
+                userDestinationAccount: userSourceTokenAccount, // Limit order swaps back to original token (sourceMint)
                 inputMint: sourceMint,
                 outputMint: destinationMint,
                 inputTokenProgram: TOKEN_PROGRAM_ID,
@@ -828,8 +828,8 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
         );
         assert.equal(
             orderAccount.outputMint.toString(),
-            destinationMint.toString(),
-            "Order output mint should be same as input mint"
+            sourceMint.toString(),
+            "Order output mint should be swap input mint (swap back to original token)"
         );
         assert.equal(
             orderAccount.inputVault.toString(),
@@ -838,8 +838,8 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
         );
         assert.equal(
             orderAccount.userDestinationAccount.toString(),
-            userDestinationTokenAccount.toString(),
-            "User destination account mismatch"
+            userSourceTokenAccount.toString(),
+            "User destination account should be source token account (limit order swaps back to original token)"
         );
         assert.equal(
             orderAccount.inputAmount.toString(),
@@ -922,7 +922,11 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             .signers([user])
             .rpc();
 
-        const quotedOutAmount = new BN(30_738_462);
+        // For StopLoss: price_ratio <= 10000 - trigger_price_bps (9500)
+        // price_ratio = (quotedOutAmount * 10000) / minOutputAmount
+        // So: quotedOutAmount <= 9500 * minOutputAmount / 10000 = 9500 * 30_000_000 / 10000 = 28_500_000
+        // Use a value that clearly satisfies the trigger condition
+        const quotedOutAmount = new BN(27_000_000); // Less than 28_500_000 to trigger StopLoss
         const platformFeeBps = 10;
 
         const routePlan = [
@@ -1082,9 +1086,13 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             const orderAccountBefore = await program.account.limitOrder.fetch(limitOrder);
             assert.equal(orderAccountBefore.status.open !== undefined, true, "Order should be open");
 
-            // Use the same quotedOutAmount as in test 3, which is known to work
-            // This value satisfies: (39_486_167 * 10000) / 30_000_000 = 13162 >= 10500 (10000 + 500)
-            const quotedOutAmount = new BN(39_486_167);
+            // For TakeProfit: price_ratio >= 10000 + trigger_price_bps (10500)
+            // price_ratio = (quotedOutAmount * 10000) / minOutputAmount
+            // So: quotedOutAmount >= 10500 * minOutputAmount / 10000 = 10500 * 30_000_000 / 10000 = 31_500_000
+            // Also need to account for slippage: min_acceptable = quotedOutAmount * (10000 - slippage_bps) / 10000
+            // With slippage_bps = 300 (3%): min_acceptable = quotedOutAmount * 9700 / 10000
+            // Use the same value as in test 3, which is known to work
+            const quotedOutAmount = new BN(39_486_167); // Same as test 3, satisfies trigger and provides good slippage buffer
             const platformFeeBps = 10;
 
             const routePlan = [

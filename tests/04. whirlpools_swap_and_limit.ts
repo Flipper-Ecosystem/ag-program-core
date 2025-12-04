@@ -178,6 +178,16 @@ describe("Flipper Swap Protocol - Whirlpools Swap and Limit Orders", () => {
             1_000_000_000_000
         );
 
+        // Mint tokens to userIntermediateTokenAccount
+        await mintTo(
+            provider.connection,
+            wallet.payer,
+            intermediateMint,
+            userIntermediateTokenAccount,
+            wallet.publicKey,
+            1_000_000_000_000
+        );
+
         // Platform fee account
         const tokenAccount = await getOrCreateAssociatedTokenAccount(
             provider.connection,

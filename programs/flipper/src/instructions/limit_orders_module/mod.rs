@@ -293,7 +293,10 @@ pub struct ExecuteLimitOrder<'info> {
     pub limit_order: Account<'info, LimitOrder>,
 
     /// Vault holding input tokens
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = input_vault.mint == limit_order.input_mint @ ErrorCode::InvalidMint
+    )]
     pub input_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Token program for input tokens
@@ -310,9 +313,15 @@ pub struct ExecuteLimitOrder<'info> {
     )]
     pub user_destination_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    /// Input token mint
+    /// Input token mint (must match limit_order.input_mint)
+    #[account(
+        constraint = input_mint.key() == limit_order.input_mint @ ErrorCode::InvalidMint
+    )]
     pub input_mint: InterfaceAccount<'info, Mint>,
-    /// Output token mint
+    /// Output token mint (must match limit_order.output_mint)
+    #[account(
+        constraint = output_mint.key() == limit_order.output_mint @ ErrorCode::InvalidMint
+    )]
     pub output_mint: InterfaceAccount<'info, Mint>,
 
     /// Optional platform fee collection account
@@ -694,8 +703,9 @@ pub struct RouteAndCreateOrder<'info> {
     pub user_input_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// User's destination account for final order output tokens
+    /// Limit order swaps output_mint back to input_mint (original token)
     #[account(
-        constraint = user_destination_account.mint == output_mint.key(),
+        constraint = user_destination_account.mint == input_mint.key(),
         constraint = user_destination_account.owner == creator.key()
     )]
     pub user_destination_account: Box<InterfaceAccount<'info, TokenAccount>>,
@@ -703,7 +713,7 @@ pub struct RouteAndCreateOrder<'info> {
     /// Swap input token mint
     pub input_mint: Box<InterfaceAccount<'info, Mint>>,
 
-    /// Swap output token mint (becomes order input/output mint)
+    /// Swap output token mint (becomes order input mint, and order output mint)
     pub output_mint: Box<InterfaceAccount<'info, Mint>>,
 
     /// Token program for swap input tokens
@@ -925,8 +935,8 @@ pub fn route_and_create_order<'info>(
 
     let order = &mut ctx.accounts.limit_order;
     order.creator = ctx.accounts.creator.key();
-    order.input_mint = ctx.accounts.output_mint.key(); // Order input is swap output
-    order.output_mint = ctx.accounts.output_mint.key(); // Same token for order output
+    order.input_mint = ctx.accounts.output_mint.key(); // Order input is swap output (e.g., USDT)
+    order.output_mint = ctx.accounts.input_mint.key(); // Order output is swap input (e.g., SOL) - swap back to original token
     order.input_vault = ctx.accounts.input_vault.key();
     order.user_destination_account = ctx.accounts.user_destination_account.key();
     order.input_amount = out_amount; // Amount after fee

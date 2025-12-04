@@ -635,8 +635,8 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
                 inputTokenProgram: TOKEN_PROGRAM_ID,
                 outputTokenProgram: TOKEN_PROGRAM_ID,
                 userDestinationTokenAccount,
-                inputMint: sourceMint,
-                outputMint: destinationMint,
+                inputMint: sourceMint, // For createLimitOrder: order.input_mint = sourceMint
+                outputMint: destinationMint, // For createLimitOrder: order.output_mint = destinationMint
                 platformFeeAccount,
                 operator: operator.publicKey,
                 systemProgram: SystemProgram.programId,
@@ -806,7 +806,7 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
                 limitOrder,
                 inputVault: orderVault,
                 userInputAccount: userSourceTokenAccount,
-                userDestinationAccount: userDestinationTokenAccount,
+                userDestinationAccount: userSourceTokenAccount, // Limit order swaps back to original token (sourceMint)
                 inputMint: sourceMint,
                 outputMint: destinationMint,
                 inputTokenProgram: TOKEN_PROGRAM_ID,
@@ -862,8 +862,8 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
         );
         assert.equal(
             orderAccount.outputMint.toString(),
-            destinationMint.toString(),
-            "Order output mint should be same as input mint"
+            sourceMint.toString(),
+            "Order output mint should be swap input mint (swap back to original token)"
         );
         assert.equal(
             orderAccount.inputVault.toString(),
@@ -872,8 +872,8 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
         );
         assert.equal(
             orderAccount.userDestinationAccount.toString(),
-            userDestinationTokenAccount.toString(),
-            "User destination account mismatch"
+            userSourceTokenAccount.toString(),
+            "User destination account should be source token account (limit order swaps back to original token)"
         );
         assert.equal(
             orderAccount.inputAmount.toString(),
@@ -959,7 +959,11 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
             .rpc();
 
         // Execute order with price drop
-        const quotedOutAmount = new BN(30_738_462);
+        // For StopLoss: price_ratio <= 10000 - trigger_price_bps (9500)
+        // price_ratio = (quotedOutAmount * 10000) / minOutputAmount
+        // So: quotedOutAmount <= 9500 * minOutputAmount / 10000 = 9500 * 30_000_000 / 10000 = 28_500_000
+        // Use a value that clearly satisfies the trigger condition
+        const quotedOutAmount = new BN(27_000_000); // Less than 28_500_000 to trigger StopLoss
         const platformFeeBps = 10;
 
         const routePlan = [
