@@ -1,7 +1,8 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
-    transfer_checked, TransferChecked
+    transfer_checked, TransferChecked,
+    close_account, CloseAccount
 };
 use crate::adapters::adapter_connector_module::AdapterContext;
 use crate::errors::ErrorCode;
@@ -355,6 +356,11 @@ pub struct ExecuteLimitOrder<'info> {
     )]
     pub operator: Signer<'info>,
 
+    /// Destination account to receive rent from closed input_vault
+    #[account(mut)]
+    /// CHECK: validated by code
+    pub vault_rent_destination: AccountInfo<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -557,6 +563,20 @@ pub fn execute_limit_order<'info>(
         trigger_type: ctx.accounts.limit_order.trigger_type as u8,
     });
 
+    // Close input_vault and return rent to operator
+    // All tokens have been transferred out via swap, so vault is empty
+    close_account(
+        CpiContext::new_with_signer(
+            ctx.accounts.input_token_program.to_account_info(),
+            CloseAccount {
+                account: ctx.accounts.input_vault.to_account_info(),
+                destination: ctx.accounts.vault_rent_destination.to_account_info(),
+                authority: ctx.accounts.vault_authority.to_account_info(),
+            },
+            signer_seeds
+        )
+    )?;
+
     Ok(output_amount)
 }
 
@@ -607,6 +627,11 @@ pub struct CancelLimitOrder<'info> {
     /// Order creator (must sign)
     #[account(mut, signer)]
     pub creator: Signer<'info>,
+
+    /// Destination account to receive rent from closed input_vault
+    #[account(mut)]
+    /// CHECK: validated by code
+    pub vault_rent_destination: AccountInfo<'info>,
 }
 
 /// Cancels an open limit order and refunds tokens to creator
@@ -641,6 +666,20 @@ pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>) -> Result<()> {
         creator: ctx.accounts.creator.key(),
     });
 
+    // Close input_vault and return rent to creator
+    // All tokens have been refunded to creator, so vault is empty
+    close_account(
+        CpiContext::new_with_signer(
+            ctx.accounts.input_token_program.to_account_info(),
+            CloseAccount {
+                account: ctx.accounts.input_vault.to_account_info(),
+                destination: ctx.accounts.vault_rent_destination.to_account_info(),
+                authority: ctx.accounts.vault_authority.to_account_info(),
+            },
+            signer_seeds
+        )
+    )?;
+
     // Account will be closed automatically and rent transferred to creator due to `close = creator`
     // Note: Operator can also close cancelled orders if they weren't closed by creator
     Ok(())
@@ -657,6 +696,13 @@ pub struct CloseLimitOrderByOperator<'info> {
     )]
     pub adapter_registry: Account<'info, AdapterRegistry>,
 
+    /// Vault authority controlling token transfers
+    #[account(
+        seeds = [b"vault_authority"],
+        bump
+    )]
+    pub vault_authority: Account<'info, VaultAuthority>,
+
     /// Limit order to close (must be filled or cancelled)
     #[account(
         mut,
@@ -665,6 +711,16 @@ pub struct CloseLimitOrderByOperator<'info> {
     )]
     pub limit_order: Account<'info, LimitOrder>,
 
+    /// Vault holding input tokens (should be empty, will be closed)
+    #[account(
+        mut,
+        constraint = input_vault.key() == limit_order.input_vault @ ErrorCode::InvalidVaultAddress
+    )]
+    pub input_vault: InterfaceAccount<'info, TokenAccount>,
+
+    /// Token program for input tokens
+    pub input_token_program: Interface<'info, TokenInterface>,
+
     /// Operator closing the order (must be registered, receives rent)
     #[account(
         mut,
@@ -672,6 +728,11 @@ pub struct CloseLimitOrderByOperator<'info> {
         constraint = adapter_registry.operators.contains(&operator.key()) @ ErrorCode::InvalidOperator
     )]
     pub operator: Signer<'info>,
+
+    /// Destination account to receive rent from closed input_vault
+    #[account(mut)]
+    /// CHECK: validated by code
+    pub vault_rent_destination: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -683,6 +744,30 @@ pub fn close_limit_order_by_operator(ctx: Context<CloseLimitOrderByOperator>) ->
     let status = ctx.accounts.limit_order.status as u8;
 
     msg!("Closing limit order {} by operator {}, status: {}", order_key, operator_key, status);
+
+    // Prepare PDA signer seeds
+    let vault_authority_bump = ctx.bumps.vault_authority;
+    let authority_seeds: &[&[u8]] = &[
+        b"vault_authority".as_ref(),
+        &[vault_authority_bump],
+    ];
+    let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
+
+    // Close input_vault and return rent to operator
+    // For filled orders: vault is empty (tokens were transferred during execution)
+    // For cancelled orders: vault should be empty (tokens were refunded during cancellation)
+    // If vault still exists and is empty, close it to recover rent
+    close_account(
+        CpiContext::new_with_signer(
+            ctx.accounts.input_token_program.to_account_info(),
+            CloseAccount {
+                account: ctx.accounts.input_vault.to_account_info(),
+                destination: ctx.accounts.vault_rent_destination.to_account_info(),
+                authority: ctx.accounts.vault_authority.to_account_info(),
+            },
+            signer_seeds
+        )
+    )?;
 
     // Account is automatically closed by Anchor and rent is sent to operator
     emit_cpi!(LimitOrderClosed {
@@ -801,6 +886,7 @@ pub fn route_and_create_order<'info>(
     platform_fee_bps: u8,
     order_min_output_amount: u64,
     order_trigger_price_bps: u32,
+    order_trigger_type: TriggerType,
     order_expiry: i64,
     order_slippage_bps: u16,
 ) -> Result<(u64, Pubkey)> {
@@ -817,13 +903,24 @@ pub fn route_and_create_order<'info>(
         order_trigger_price_bps > 0,
         ErrorCode::InvalidTriggerPrice
     );
-    // Validate upper bound: route_and_create_order always creates TakeProfit orders
-    // Allow up to 100,000 (1000%) for TakeProfit orders
-    // 10_000 + 100_000 = 110_000 fits in u64, so no overflow risk
-    require!(
-        order_trigger_price_bps <= 100_000,
-        ErrorCode::InvalidTriggerPrice
-    );
+    // Validate upper bound based on trigger type
+    match order_trigger_type {
+        TriggerType::StopLoss => {
+            // StopLoss: max 10,000 (100%) to prevent underflow in should_execute
+            require!(
+                order_trigger_price_bps <= 10_000,
+                ErrorCode::InvalidTriggerPrice
+            );
+        },
+        TriggerType::TakeProfit => {
+            // TakeProfit: Allow up to 100,000 (1000%) for higher profit targets
+            // 10_000 + 100_000 = 110_000 fits in u64, so no overflow risk
+            require!(
+                order_trigger_price_bps <= 100_000,
+                ErrorCode::InvalidTriggerPrice
+            );
+        }
+    }
     require!(
         order_expiry > Clock::get()?.unix_timestamp,
         ErrorCode::InvalidExpiry
@@ -989,7 +1086,7 @@ pub fn route_and_create_order<'info>(
     order.input_amount = out_amount; // Amount after fee
     order.min_output_amount = order_min_output_amount;
     order.trigger_price_bps = order_trigger_price_bps;
-    order.trigger_type = TriggerType::TakeProfit;
+    order.trigger_type = order_trigger_type;
     order.expiry = order_expiry;
     order.status = OrderStatus::Open;
     order.slippage_bps = order_slippage_bps;
