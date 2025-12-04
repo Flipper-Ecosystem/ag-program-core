@@ -79,7 +79,13 @@ impl DexAdapter for WhirlpoolAdapter {
         let initial_output_amount = output_vault_data.amount;
 
         // Calculate supplemental tick arrays (up to 3: -200, 200, 300)
-        let supplemental_tick_arrays_count = ((remaining_accounts_count - MIN_ACCOUNTS - 1).min(3)) as u8;
+        // MIN_ACCOUNTS (15) covers accounts 0-14, supplemental tick arrays start at index 15
+        // The last account in remaining_accounts is program id, which should not be counted as tick array
+        // Use saturating_sub to prevent underflow when remaining_accounts_count == MIN_ACCOUNTS
+        let supplemental_tick_arrays_count = remaining_accounts_count
+            .saturating_sub(MIN_ACCOUNTS)
+            .saturating_sub(1) // Exclude last account (program id)
+            .min(3) as u8;
         
 
         // Create swap args

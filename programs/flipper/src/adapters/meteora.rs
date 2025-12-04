@@ -79,7 +79,13 @@ impl DexAdapter for MeteoraAdapter {
         }
 
         // Calculate number of bin arrays available (maximum 10 for Meteora)
-        let bin_arrays_count = ((remaining_accounts_count - MIN_ACCOUNTS - 1)).min(10) as u8;
+        // MIN_ACCOUNTS (16) covers accounts 0-15, bin arrays start at index 16
+        // The last account in remaining_accounts is program id, which should not be counted as bin array
+        // Use saturating_sub to prevent underflow when remaining_accounts_count == MIN_ACCOUNTS
+        let bin_arrays_count = remaining_accounts_count
+            .saturating_sub(MIN_ACCOUNTS)
+            .saturating_sub(1) // Exclude last account (program id)
+            .min(10) as u8;
 
         // Record initial output token balance for calculating swap result
         let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
