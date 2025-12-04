@@ -67,6 +67,13 @@ pub fn execute_route<'info>(
 
         let input_vault_account = &remaining_accounts[step.input_index as usize];
 
+        // Determine input mint from the input vault (not from previous event)
+        // This is important for partial swaps where multiple steps share the same input_index
+        let input_vault_data = input_vault_account.try_borrow_data()?;
+        let input_vault_token_account = TokenAccount::try_deserialize(&mut input_vault_data.as_ref())?;
+        let step_input_mint = input_vault_token_account.mint;
+        drop(input_vault_data);
+
         // Always use vault for output (either intermediate or destination)
         let output_account_info = remaining_accounts[step.output_index as usize].clone();
 
@@ -128,9 +135,11 @@ pub fn execute_route<'info>(
         }
 
         // Record swap event
+        // Use step_input_mint (from input vault) instead of previous event's output_mint
+        // This correctly handles partial swaps where multiple steps share the same input_index
         event_data.push(SwapEventData {
             amm: adapter_info.program_id,
-            input_mint: if i == 0 { source_mint.key() } else { event_data[i - 1].output_mint },
+            input_mint: step_input_mint,
             input_amount: step_amount,
             output_mint,
             output_amount: swap_result.output_amount,
