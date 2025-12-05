@@ -114,11 +114,16 @@ impl DexAdapter for RaydiumAdapter {
             data: instruction_data,
         };
 
-        // Find vault authority bump
-        let vault_authority_bump = Pubkey::find_program_address(
+        // Find vault authority PDA and verify that ctx.authority matches it
+        let (vault_authority_pda, vault_authority_bump) = Pubkey::find_program_address(
             &[b"vault_authority"],
             &ctx.program_id,
-        ).1;
+        );
+
+        // Verify that ctx.authority matches our calculated PDA
+        if ctx.authority.key() != vault_authority_pda {
+            return Err(ErrorCode::InvalidAccount.into());
+        }
 
         // Prepare signer seeds for CPI call
         let authority_seeds: &[&[u8]] = &[b"vault_authority", &[vault_authority_bump]];
