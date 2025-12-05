@@ -108,10 +108,14 @@ impl LimitOrder {
 
     pub fn calculate_min_acceptable_output(&self, quoted_amount: u64) -> Result<u64> {
         let min_output = (quoted_amount as u128)
-            .checked_mul((10_000u128).checked_sub(self.slippage_bps as u128).unwrap())
-            .unwrap()
+            .checked_mul(
+                (10_000u128)
+                    .checked_sub(self.slippage_bps as u128)
+                    .ok_or(ErrorCode::InvalidCalculation)?
+            )
+            .ok_or(ErrorCode::InvalidCalculation)?
             .checked_div(10_000)
-            .unwrap() as u64;
+            .ok_or(ErrorCode::InvalidCalculation)? as u64;
         Ok(min_output)
     }
 }
@@ -1037,10 +1041,14 @@ pub fn route_and_create_order<'info>(
     // ===== STEP 5: VERIFY SLIPPAGE (AFTER fees are deducted, consistent with swap_processor_module::route) =====
 
     let min_out_amount = (quoted_out_amount as u128)
-        .checked_mul((10_000u128).checked_sub(slippage_bps as u128).unwrap())
-        .unwrap()
+        .checked_mul(
+            (10_000u128)
+                .checked_sub(slippage_bps as u128)
+                .ok_or(ErrorCode::InvalidCalculation)?
+        )
+        .ok_or(ErrorCode::InvalidCalculation)?
         .checked_div(10_000)
-        .unwrap() as u64;
+        .ok_or(ErrorCode::InvalidCalculation)? as u64;
 
     require!(
         out_amount >= min_out_amount,

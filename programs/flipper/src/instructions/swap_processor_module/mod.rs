@@ -207,10 +207,14 @@ pub fn route<'info>(
 
     // Check slippage tolerance
     let min_out_amount = (quoted_out_amount as u128)
-        .checked_mul((10_000u128).checked_sub(slippage_bps as u128).unwrap())
-        .unwrap()
+        .checked_mul(
+            (10_000u128)
+                .checked_sub(slippage_bps as u128)
+                .ok_or(ErrorCode::InvalidCalculation)?
+        )
+        .ok_or(ErrorCode::InvalidCalculation)?
         .checked_div(10_000)
-        .unwrap() as u64;
+        .ok_or(ErrorCode::InvalidCalculation)? as u64;
 
     require!(
         output_amount >= min_out_amount,
