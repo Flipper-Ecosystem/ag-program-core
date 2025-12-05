@@ -168,14 +168,19 @@ pub fn validate_route<'info>(
             }
         }
 
-        // Determine output mint
-        let output_mint = if i == route_plan.len() - 1 {
-            destination_mint.key()
-        } else {
-            let account_data = output_account_info.try_borrow_data()?;
-            let output_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
-            output_vault_data.mint
-        };
+        // Determine output mint by reading from the actual account (consistent with executor)
+        let account_data = output_account_info.try_borrow_data()?;
+        let output_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
+        let output_mint = output_vault_data.mint;
+        drop(account_data);
+
+        // For the last step, verify that the output account's mint matches destination_mint
+        if i == route_plan.len() - 1 {
+            if output_mint != destination_mint.key() {
+                return Err(ErrorCode::InvalidMint.into());
+            }
+        }
+
         output_mints.push(output_mint);
 
         // Update current_amount for multi-hop validation

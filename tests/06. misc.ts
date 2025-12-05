@@ -926,8 +926,13 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
         // For StopLoss: price_ratio <= 10000 - trigger_price_bps (9500)
         // price_ratio = (quotedOutAmount * 10000) / minOutputAmount
         // So: quotedOutAmount <= 9500 * minOutputAmount / 10000 = 9500 * 30_000_000 / 10000 = 28_500_000
-        // Use a value that clearly satisfies the trigger condition
-        const quotedOutAmount = new BN(27_000_000); // Less than 28_500_000 to trigger StopLoss
+        // But we also need to account for slippage check AFTER fees
+        // With slippage_bps = 300 (3%): min_acceptable = quotedOutAmount * 9700 / 10000
+        // With platformFeeBps = 10 (0.1%): after fee = output_amount * 9990 / 10000
+        // Need: output_amount * 9990 / 10000 >= quotedOutAmount * 9700 / 10000
+        // So: output_amount >= quotedOutAmount * 9700 / 9990
+        // Use a value that satisfies trigger AND slippage after fees
+        const quotedOutAmount = new BN(26_000_000); // Lower value to ensure trigger condition, but still enough for slippage after fees
         const platformFeeBps = 10;
 
         const routePlan = [
@@ -1090,10 +1095,13 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             // For TakeProfit: price_ratio >= 10000 + trigger_price_bps (10500)
             // price_ratio = (quotedOutAmount * 10000) / minOutputAmount
             // So: quotedOutAmount >= 10500 * minOutputAmount / 10000 = 10500 * 30_000_000 / 10000 = 31_500_000
-            // Also need to account for slippage: min_acceptable = quotedOutAmount * (10000 - slippage_bps) / 10000
+            // Also need to account for slippage AFTER fees: min_acceptable = quotedOutAmount * (10000 - slippage_bps) / 10000
             // With slippage_bps = 300 (3%): min_acceptable = quotedOutAmount * 9700 / 10000
-            // Use the same value as in test 3, which is known to work
-            const quotedOutAmount = new BN(39_486_167); // Same as test 3, satisfies trigger and provides good slippage buffer
+            // With platformFeeBps = 10 (0.1%): after fee = output_amount * 9990 / 10000
+            // Need: output_amount * 9990 / 10000 >= quotedOutAmount * 9700 / 10000
+            // So: output_amount >= quotedOutAmount * 9700 / 9990 = quotedOutAmount * 0.97097
+            // To be safe, use a higher value that accounts for both slippage and fees
+            const quotedOutAmount = new BN(40_000_000); // Increased to account for slippage check AFTER fees
             const platformFeeBps = 10;
 
             const routePlan = [

@@ -469,14 +469,6 @@ pub fn execute_limit_order<'info>(
         return Err(ErrorCode::TriggerPriceNotMet.into());
     }
 
-
-    let min_acceptable = ctx.accounts.limit_order
-        .calculate_min_acceptable_output(quoted_out_amount)?;
-
-    if output_amount < min_acceptable {
-        return Err(ErrorCode::SlippageToleranceExceeded.into());
-    }
-
     // Collect platform fee if specified
     let mut fee_amount = 0u64;
     let mut fee_account: Option<Pubkey> = None;
@@ -511,6 +503,14 @@ pub fn execute_limit_order<'info>(
             fee_account = Some(platform_fee_account.key());
             output_amount = output_amount.checked_sub(fee_amount).ok_or(ErrorCode::InvalidCalculation)?;
         }
+    }
+
+    // Check slippage tolerance AFTER fees are deducted (consistent with swap_processor_module::route)
+    let min_acceptable = ctx.accounts.limit_order
+        .calculate_min_acceptable_output(quoted_out_amount)?;
+
+    if output_amount < min_acceptable {
+        return Err(ErrorCode::SlippageToleranceExceeded.into());
     }
 
     // Transfer output tokens to user's destination account
@@ -994,20 +994,7 @@ pub fn route_and_create_order<'info>(
         });
     }
 
-    // ===== STEP 4: VERIFY SLIPPAGE =====
-
-    let min_out_amount = (quoted_out_amount as u128)
-        .checked_mul((10_000u128).checked_sub(slippage_bps as u128).unwrap())
-        .unwrap()
-        .checked_div(10_000)
-        .unwrap() as u64;
-
-    require!(
-        out_amount >= min_out_amount,
-        ErrorCode::SlippageToleranceExceeded
-    );
-
-    // ===== STEP 5: COLLECT PLATFORM FEE FROM SWAP =====
+    // ===== STEP 4: COLLECT PLATFORM FEE FROM SWAP =====
 
     let mut fee_amount = 0u64;
     let mut fee_account: Option<Pubkey> = None;
@@ -1046,6 +1033,19 @@ pub fn route_and_create_order<'info>(
                 .ok_or(ErrorCode::InvalidCalculation)?;
         }
     }
+
+    // ===== STEP 5: VERIFY SLIPPAGE (AFTER fees are deducted, consistent with swap_processor_module::route) =====
+
+    let min_out_amount = (quoted_out_amount as u128)
+        .checked_mul((10_000u128).checked_sub(slippage_bps as u128).unwrap())
+        .unwrap()
+        .checked_div(10_000)
+        .unwrap() as u64;
+
+    require!(
+        out_amount >= min_out_amount,
+        ErrorCode::SlippageToleranceExceeded
+    );
 
     // Emit global router swap event for the swap part
     emit_cpi!(RouterSwapEvent {
