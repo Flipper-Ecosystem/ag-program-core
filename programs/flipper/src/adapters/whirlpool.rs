@@ -241,6 +241,30 @@ impl DexAdapter for WhirlpoolAdapter {
             return Err(ErrorCode::InvalidCpiInterface.into());
         }
 
+        // Validate pool vault accounts (token_vault_a at index 8, token_vault_b at index 10)
+        let token_vault_a = &adapter_accounts[8];
+        let token_vault_b = &adapter_accounts[10];
+        let token_mint_a = &adapter_accounts[5];
+        let token_mint_b = &adapter_accounts[6];
+
+        // Ensure vault accounts are not default pubkeys
+        if token_vault_a.key() == Pubkey::default() || token_vault_b.key() == Pubkey::default() {
+            return Err(ErrorCode::InvalidAccount.into());
+        }
+
+        // Validate vault accounts are valid token accounts
+        let vault_a_data = TokenAccount::try_deserialize(&mut token_vault_a.data.borrow().as_ref())
+            .map_err(|_| ErrorCode::InvalidAccount)?;
+        let vault_b_data = TokenAccount::try_deserialize(&mut token_vault_b.data.borrow().as_ref())
+            .map_err(|_| ErrorCode::InvalidAccount)?;
+
+        // Validate vault mints match expected token mints
+        if vault_a_data.mint != token_mint_a.key() {
+            return Err(ErrorCode::InvalidMint.into());
+        }
+        if vault_b_data.mint != token_mint_b.key() {
+            return Err(ErrorCode::InvalidMint.into());
+        }
 
         // Validate tick arrays (indices 11, 12, 13 match execute_swap)
         for i in 11..=13 {
