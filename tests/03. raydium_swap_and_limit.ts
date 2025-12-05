@@ -639,7 +639,6 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
                 outputMint: destinationMint, // For createLimitOrder: order.output_mint = destinationMint
                 platformFeeAccount,
                 operator: operator.publicKey,
-                vaultRentDestination: operator.publicKey,
                 systemProgram: SystemProgram.programId,
             })
             .remainingAccounts(remainingAccounts)
@@ -715,7 +714,6 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
                 inputMint: sourceMint,
                 inputTokenProgram: TOKEN_PROGRAM_ID,
                 creator: user.publicKey,
-                vaultRentDestination: user.publicKey,
             })
             .signers([user])
             .rpc();
@@ -1020,7 +1018,6 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
                 outputMint: destinationMint,
                 platformFeeAccount,
                 operator: operator.publicKey,
-                vaultRentDestination: operator.publicKey,
                 systemProgram: SystemProgram.programId,
             })
             .remainingAccounts(remainingAccounts)

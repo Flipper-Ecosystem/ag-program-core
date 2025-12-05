@@ -688,7 +688,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 inputMint: sourceMint,
                 inputTokenProgram: TOKEN_PROGRAM_ID,
                 creator: user.publicKey,
-                vaultRentDestination: user.publicKey,
             })
             .signers([user])
             .rpc();
@@ -981,7 +980,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 outputMint: destinationMint,
                 platformFeeAccount,
                 operator: operator.publicKey,
-                vaultRentDestination: operator.publicKey,
                 systemProgram: SystemProgram.programId,
             })
             .remainingAccounts(remainingAccounts)
@@ -1141,7 +1139,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                     outputMint: destinationMint,
                     platformFeeAccount,
                     operator: operator.publicKey,
-                    vaultRentDestination: operator.publicKey,
                     systemProgram: SystemProgram.programId,
                 })
                 .remainingAccounts(remainingAccounts)
@@ -1223,7 +1220,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                     inputMint: sourceMint,
                     inputTokenProgram: TOKEN_PROGRAM_ID,
                     creator: user.publicKey,
-                    vaultRentDestination: user.publicKey,
                 })
                 .signers([user])
                 .rpc();
@@ -1296,7 +1292,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                         inputVault: orderVault,
                         inputTokenProgram: TOKEN_PROGRAM_ID,
                         operator: operator.publicKey,
-                        vaultRentDestination: operator.publicKey,
                         systemProgram: SystemProgram.programId,
                     })
                     .signers([operator])
@@ -1367,7 +1362,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                         inputVault: orderVault,
                         inputTokenProgram: TOKEN_PROGRAM_ID,
                         operator: user.publicKey,
-                        vaultRentDestination: user.publicKey,
                         systemProgram: SystemProgram.programId,
                     })
                     .signers([user])

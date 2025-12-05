@@ -356,11 +356,6 @@ pub struct ExecuteLimitOrder<'info> {
     )]
     pub operator: Signer<'info>,
 
-    /// Destination account to receive rent from closed input_vault
-    #[account(mut)]
-    /// CHECK: validated by code
-    pub vault_rent_destination: AccountInfo<'info>,
-
     pub system_program: Program<'info, System>,
 }
 
@@ -570,7 +565,7 @@ pub fn execute_limit_order<'info>(
             ctx.accounts.input_token_program.to_account_info(),
             CloseAccount {
                 account: ctx.accounts.input_vault.to_account_info(),
-                destination: ctx.accounts.vault_rent_destination.to_account_info(),
+                destination: ctx.accounts.operator.to_account_info(),
                 authority: ctx.accounts.vault_authority.to_account_info(),
             },
             signer_seeds
@@ -624,14 +619,9 @@ pub struct CancelLimitOrder<'info> {
     /// Token program for input tokens
     pub input_token_program: Interface<'info, TokenInterface>,
 
-    /// Order creator (must sign)
+    /// Order creator (must sign, receives rent from closed input_vault)
     #[account(mut, signer)]
     pub creator: Signer<'info>,
-
-    /// Destination account to receive rent from closed input_vault
-    #[account(mut)]
-    /// CHECK: validated by code
-    pub vault_rent_destination: AccountInfo<'info>,
 }
 
 /// Cancels an open limit order and refunds tokens to creator
@@ -673,7 +663,7 @@ pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>) -> Result<()> {
             ctx.accounts.input_token_program.to_account_info(),
             CloseAccount {
                 account: ctx.accounts.input_vault.to_account_info(),
-                destination: ctx.accounts.vault_rent_destination.to_account_info(),
+                destination: ctx.accounts.creator.to_account_info(),
                 authority: ctx.accounts.vault_authority.to_account_info(),
             },
             signer_seeds
@@ -721,18 +711,13 @@ pub struct CloseLimitOrderByOperator<'info> {
     /// Token program for input tokens
     pub input_token_program: Interface<'info, TokenInterface>,
 
-    /// Operator closing the order (must be registered, receives rent)
+    /// Operator closing the order (must be registered, receives rent from closed input_vault)
     #[account(
         mut,
         signer,
         constraint = adapter_registry.operators.contains(&operator.key()) @ ErrorCode::InvalidOperator
     )]
     pub operator: Signer<'info>,
-
-    /// Destination account to receive rent from closed input_vault
-    #[account(mut)]
-    /// CHECK: validated by code
-    pub vault_rent_destination: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -762,7 +747,7 @@ pub fn close_limit_order_by_operator(ctx: Context<CloseLimitOrderByOperator>) ->
             ctx.accounts.input_token_program.to_account_info(),
             CloseAccount {
                 account: ctx.accounts.input_vault.to_account_info(),
-                destination: ctx.accounts.vault_rent_destination.to_account_info(),
+                destination: ctx.accounts.operator.to_account_info(),
                 authority: ctx.accounts.vault_authority.to_account_info(),
             },
             signer_seeds
