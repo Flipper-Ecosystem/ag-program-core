@@ -14,25 +14,27 @@ pub struct SwapEventData {
     pub output_amount: u64,
 }
 
+/// Calculate the remaining accounts range for a specific step
+fn calculate_adapter_accounts_range(
+    step: &RoutePlanStep,
+    route_plan: &[RoutePlanStep],
+    step_index: usize
+) -> (usize, usize) {
+    let start_index = step.input_index as usize + 1; // Skip input vault itself
+
+    let end_index = step.output_index as usize;
+
+    let count = end_index.saturating_sub(start_index);
+    (start_index, count)
+}
+
 /// Executes a route plan, handling partial swaps, multi-hop swaps, and partial multi-hop swaps
-/// # Arguments
-/// * `adapter_registry` - The adapter registry containing supported adapters
-/// * `input_token_program` - The token program for transfers
-/// * `vault_authority` - The authority for the vault accounts
-/// * `source_mint` - The mint of the input token
-/// * `user_destination_token_account` - The user's destination token account
-/// * `route_plan` - Array of route plan steps
-/// * `remaining_accounts` - Additional accounts required for swaps
-/// * `program_id` - The program ID of this program
-/// * `in_amount` - The total input amount for the route
-/// # Returns
-/// * `Result<(u64, Vec<SwapEventData>)>` - The final output amount and swap event data
 pub fn execute_route<'info>(
     adapter_registry: &Account<'info, AdapterRegistry>,
     input_token_program: &AccountInfo<'info>,
     vault_authority: &AccountInfo<'info>,
     source_mint: &AccountInfo<'info>,
-    user_destination_token_account: &AccountInfo<'info>,
+    destination_vault: &AccountInfo<'info>, // Changed parameter name
     route_plan: &[RoutePlanStep],
     remaining_accounts: &'info [AccountInfo<'info>],
     program_id: &Pubkey,
@@ -41,7 +43,12 @@ pub fn execute_route<'info>(
     let mut current_amount = in_amount;
     let mut total_output_amount: u64 = 0;
     let mut event_data: Vec<SwapEventData> = Vec::new();
-    let destination_mint = user_destination_token_account.key();
+
+    // Get destination mint from vault
+    let account_data = destination_vault.try_borrow_data()?;
+    let destination_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
+    let destination_mint = destination_vault_data.mint;
+    drop(account_data); // Release borrow
 
     // Process each step in the route plan
     for (i, step) in route_plan.iter().enumerate() {
@@ -53,11 +60,16 @@ pub fn execute_route<'info>(
         };
 
         let input_vault_account = &remaining_accounts[step.input_index as usize];
-        let output_account_info = if i == route_plan.len() - 1 {
-            user_destination_token_account.clone()
-        } else {
-            remaining_accounts[step.output_index as usize].clone()
-        };
+
+        // Determine input mint from the input vault (not from previous event)
+        // This is important for partial swaps where multiple steps share the same input_index
+        let input_vault_data = input_vault_account.try_borrow_data()?;
+        let input_vault_token_account = TokenAccount::try_deserialize(&mut input_vault_data.as_ref())?;
+        let step_input_mint = input_vault_token_account.mint;
+        drop(input_vault_data);
+
+        // Always use vault for output (either intermediate or destination)
+        let output_account_info = remaining_accounts[step.output_index as usize].clone();
 
         // Get adapter
         let adapter = get_adapter(&step.swap, adapter_registry)?;
@@ -77,30 +89,51 @@ pub fn execute_route<'info>(
             program_id: *program_id,
         };
 
-        // Execute the swap
-        let swap_result = adapter.execute_swap(adapter_ctx, step_amount, step.input_index as usize + 1)?;
+        // Calculate correct start index and count for adapter
+        let (adapter_start_index, adapter_accounts_count) = calculate_adapter_accounts_range(step, route_plan, i);
+
+        // Execute the swap with correct range
+        let swap_result = adapter.execute_swap(adapter_ctx, step_amount, adapter_start_index, adapter_accounts_count)?;
 
         // Determine output mint
-        let output_mint = if i != route_plan.len() - 1 {
-            let account_data = output_account_info.try_borrow_data()?;
-            let output_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
-            output_vault_data.mint
-        } else {
-            user_destination_token_account.key()
-        };
+        let account_data = output_account_info.try_borrow_data()?;
+        let output_vault_data = TokenAccount::try_deserialize(&mut account_data.as_ref())?;
+        let output_mint = output_vault_data.mint;
+        drop(account_data);
+
+        // Check if this is part of a partial swap (multiple steps share the same input_index)
+        let is_partial_swap_step = step.percent < 100 && route_plan.iter().any(|s| 
+            s.input_index == step.input_index && s.percent < 100
+        );
+
+        // Check if there are more steps with the same input_index after this one
+        let has_more_partial_steps = is_partial_swap_step && route_plan.iter().skip(i + 1).any(|s| 
+            s.input_index == step.input_index
+        );
 
         // Update amounts: accumulate only if output mint matches destination_mint
         if output_mint == destination_mint {
             total_output_amount = total_output_amount.saturating_add(swap_result.output_amount);
         } else {
             // For non-final steps in multi-hop, update current_amount
-            current_amount = swap_result.output_amount;
+            // BUT: Don't update for partial swap steps that output to intermediate tokens
+            // if there are more partial steps with the same input_index, as those steps
+            // still need to use the original input amount
+            if !has_more_partial_steps {
+                // This is the last step with this input_index, safe to update current_amount
+                current_amount = swap_result.output_amount;
+            }
+            // For partial swap steps with intermediate output and more steps to come,
+            // keep current_amount unchanged so subsequent partial steps can still
+            // calculate based on original input
         }
 
         // Record swap event
+        // Use step_input_mint (from input vault) instead of previous event's output_mint
+        // This correctly handles partial swaps where multiple steps share the same input_index
         event_data.push(SwapEventData {
             amm: adapter_info.program_id,
-            input_mint: if i == 0 { source_mint.key() } else { event_data[i - 1].output_mint },
+            input_mint: step_input_mint,
             input_amount: step_amount,
             output_mint,
             output_amount: swap_result.output_amount,

@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 // Defines error codes for the Solana program
-// Used to handle various failure cases during swap and adapter operations
+// Used to handle various failure cases during swap, adapter, and limit order operations
 #[error_code]
 pub enum ErrorCode {
     #[msg("Empty route")]
@@ -82,6 +82,38 @@ pub enum ErrorCode {
     InvalidPartialSwapPercent = 6057,
     #[msg("Insufficient dexes partially swap")]
     InsufficientDexesForPartialSwap = 6058,
-    #[msg("No ouput produced")]
-    NoOutputProduced = 6059
+    #[msg("No output produced")]
+    NoOutputProduced = 6059,
+    #[msg("Invalid order status")]
+    InvalidOrderStatus = 6060,
+    #[msg("Order has expired")]
+    OrderExpired = 6061,
+    #[msg("Invalid Expiry")]
+    InvalidExpiry = 6062,
+    #[msg("Order already filled")]
+    OrderAlreadyFilled,
+
+    #[msg("Order already cancelled")]
+    OrderAlreadyCancelled,
+
+    #[msg("Insufficient vault balance")]
+    InsufficientVaultBalance,
+
+    #[msg("Oracle price not within trigger range")]
+    OraclePriceNotInRange,
+
+    #[msg("Market conditions not met")]
+    MarketConditionsNotMet,
+
+    #[msg("Trigger price condition not met")]
+    TriggerPriceNotMet,
+
+    #[msg("Invalid trigger price")]
+    InvalidTriggerPrice,
+
+    #[msg("Insufficient output amount")]
+    InsufficientOutputAmount,
+
+    #[msg("Stop loss price not reached")]
+    StopLossPriceNotReached
 }

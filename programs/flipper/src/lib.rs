@@ -6,7 +6,7 @@ pub mod instructions;
 pub mod errors;
 pub mod state;
 
-declare_id!("5958qddzZjU34CHUD4bisVBiYgDQ6EREwBLgpbVaSLX7");
+declare_id!("fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit");
 
 #[program]
 pub mod flipper {
@@ -14,7 +14,8 @@ pub mod flipper {
     pub use instructions::{
         adapter_registry_module::*,
         swap_processor_module::*,
-        vault_manager_module::*
+        vault_manager_module::*,
+        limit_orders_module::*
     };
     pub use errors::ErrorCode;
     pub use state::{
@@ -97,5 +98,97 @@ pub mod flipper {
         platform_fee_bps: u8,
     ) -> Result<u64> {
         instructions::route(ctx, route_plan, in_amount, quoted_out_amount, slippage_bps, platform_fee_bps)
+    }
+
+    // Limit Orders functions
+
+    /// Creates a new limit order
+    pub fn create_limit_order(
+        ctx: Context<CreateLimitOrder>,
+        nonce: u64,
+        input_amount: u64,
+        min_output_amount: u64,
+        trigger_price_bps: u32,
+        trigger_type: TriggerType,
+        expiry: i64,
+        slippage_bps: u16
+    ) -> Result<()> {
+        instructions::create_limit_order(
+            ctx,
+            nonce,
+            input_amount,
+            min_output_amount,
+            trigger_price_bps,
+            trigger_type,
+            expiry,
+            slippage_bps
+        )
+    }
+
+    /// Executes a limit order when trigger conditions are met
+    pub fn execute_limit_order<'info>(
+        ctx: Context<'_, '_, 'info, 'info, ExecuteLimitOrder<'info>>,
+        route_plan: Vec<RoutePlanStep>,
+        quoted_out_amount: u64,
+        platform_fee_bps: u8,
+    ) -> Result<u64> {
+        instructions::execute_limit_order(
+            ctx,
+            route_plan,
+            quoted_out_amount,
+            platform_fee_bps,
+        )
+    }
+
+    /// Cancels an open limit order
+    pub fn cancel_limit_order(
+        ctx: Context<CancelLimitOrder>,
+    ) -> Result<()> {
+        instructions::cancel_limit_order(ctx)
+    }
+
+    /// Cancels an expired open limit order by operator
+    /// Rent from limit_order account goes to operator, rent from input_vault + tokens go to creator
+    pub fn cancel_expired_limit_order_by_operator(
+        ctx: Context<CancelExpiredLimitOrderByOperator>,
+    ) -> Result<()> {
+        instructions::cancel_expired_limit_order_by_operator(ctx)
+    }
+
+    /// Closes a filled or cancelled limit order by operator and collects rent
+    pub fn close_limit_order_by_operator(
+        ctx: Context<CloseLimitOrderByOperator>,
+    ) -> Result<()> {
+        instructions::close_limit_order_by_operator(ctx)
+    }
+
+    pub fn route_and_create_order<'info>(
+        ctx: Context<'_, '_, 'info, 'info, RouteAndCreateOrder<'info>>,
+        order_nonce: u64,
+        route_plan: Vec<crate::state::RoutePlanStep>,
+        in_amount: u64,
+        quoted_out_amount: u64,
+        slippage_bps: u16,
+        platform_fee_bps: u8,
+        order_min_output_amount: u64,
+        order_trigger_price_bps: u32,
+        order_trigger_type: TriggerType,
+        order_expiry: i64,
+        order_slippage_bps: u16,
+    ) -> Result<(u64, Pubkey)> {
+        instructions::route_and_create_order(
+            ctx,
+            order_nonce,
+            route_plan,
+            in_amount,
+            quoted_out_amount,
+            slippage_bps,
+            platform_fee_bps,
+            order_min_output_amount,
+            order_trigger_price_bps,
+            order_trigger_type,
+            order_expiry,
+            order_slippage_bps
+        )
     }
 }

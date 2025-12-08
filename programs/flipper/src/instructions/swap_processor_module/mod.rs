@@ -36,22 +36,24 @@ pub struct Route<'info> {
     #[account(
         mut,
         constraint = user_source_token_account.mint == source_mint.key(),
-        constraint = user_source_token_account.owner == user_transfer_authority.key(),
+        constraint = user_source_token_account.owner == user_transfer_authority.key()
     )]
-    pub user_source_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub user_source_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         mut,
         constraint = user_destination_token_account.mint == destination_mint.key(),
         constraint = user_destination_token_account.owner == user_transfer_authority.key(),
     )]
-    pub user_destination_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub user_destination_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    pub source_mint: InterfaceAccount<'info, Mint>,
-    pub destination_mint: InterfaceAccount<'info, Mint>,
+    pub source_mint: Box<InterfaceAccount<'info, Mint>>,
+    pub destination_mint: Box<InterfaceAccount<'info, Mint>>,
 
     #[account(mut)]
-    pub platform_fee_account: Option<InterfaceAccount<'info, TokenAccount>>
+    pub platform_fee_account: Option<Box<InterfaceAccount<'info, TokenAccount>>>,
+
+    pub system_program: Program<'info, System>
 }
 
 pub fn route<'info>(
@@ -113,6 +115,23 @@ pub fn route<'info>(
         })
         .ok_or(ErrorCode::VaultNotFound)?;
 
+    // Find destination vault
+    let destination_vault = ctx.remaining_accounts
+        .iter()
+        .rev()
+        .find(|acc| {
+            if let Ok(account_data) = acc.try_borrow_data() {
+                if let Ok(token_account) = TokenAccount::try_deserialize(&mut account_data.as_ref()) {
+                    token_account.mint == ctx.accounts.destination_mint.key()
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        })
+        .ok_or(ErrorCode::VaultNotFound)?;
+
     // Transfer initial funds from user to input vault using input token program
     transfer_checked(
         CpiContext::new(
@@ -128,13 +147,13 @@ pub fn route<'info>(
         ctx.accounts.source_mint.decimals,
     )?;
 
-    // Execute the route and collect event data
+    // Execute the route - now using destination_vault instead of user account
     let (mut output_amount, event_data) = route_executor_module::execute_route(
         &ctx.accounts.adapter_registry,
         &ctx.accounts.input_token_program.to_account_info(),
         &ctx.accounts.vault_authority.to_account_info(),
         &ctx.accounts.source_mint.to_account_info(),
-        &ctx.accounts.user_destination_token_account.to_account_info(),
+        destination_vault, // Changed: use vault instead of user account
         &route_plan,
         ctx.remaining_accounts,
         ctx.program_id,
@@ -153,25 +172,11 @@ pub fn route<'info>(
     }
 
     // Apply platform fee if specified
+    let mut fee_amount = 0u64;
+    let mut fee_account: Option<Pubkey> = None;
     if let Some(platform_fee_account) = &ctx.accounts.platform_fee_account {
-        let fee_amount = (output_amount as u128 * platform_fee_bps as u128 / 10_000) as u64;
+        fee_amount = (output_amount as u128 * platform_fee_bps as u128 / 10_000) as u64;
         if fee_amount > 0 {
-            // Find destination vault
-            let destination_vault = ctx.remaining_accounts
-                .iter()
-                .find(|acc| {
-                    if let Ok(account_data) = acc.try_borrow_data() {
-                        if let Ok(token_account) = TokenAccount::try_deserialize(&mut account_data.as_ref()) {
-                            token_account.mint == ctx.accounts.destination_mint.key()
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                })
-                .ok_or(ErrorCode::VaultNotFound)?;
-
             // Transfer fee using output token program
             transfer_checked(
                 CpiContext::new_with_signer(
@@ -195,14 +200,56 @@ pub fn route<'info>(
                 amount: fee_amount,
             });
 
+            fee_account = Some(platform_fee_account.key());
             output_amount = output_amount.checked_sub(fee_amount).ok_or(ErrorCode::InvalidCalculation)?;
         }
     }
 
     // Check slippage tolerance
-    if output_amount < quoted_out_amount * (10_000 - slippage_bps as u64) / 10_000 {
-        return Err(ErrorCode::SlippageToleranceExceeded.into());
-    }
+    let min_out_amount = (quoted_out_amount as u128)
+        .checked_mul(
+            (10_000u128)
+                .checked_sub(slippage_bps as u128)
+                .ok_or(ErrorCode::InvalidCalculation)?
+        )
+        .ok_or(ErrorCode::InvalidCalculation)?
+        .checked_div(10_000)
+        .ok_or(ErrorCode::InvalidCalculation)? as u64;
+
+    require!(
+        output_amount >= min_out_amount,
+        ErrorCode::SlippageToleranceExceeded
+    );
+
+
+    // Transfer final amount from destination vault to user
+    transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.output_token_program.to_account_info(),
+            TransferChecked {
+                from: destination_vault.clone(),
+                to: ctx.accounts.user_destination_token_account.to_account_info(),
+                authority: ctx.accounts.vault_authority.to_account_info(),
+                mint: ctx.accounts.destination_mint.to_account_info(),
+            },
+            signer_seeds
+        ),
+        output_amount,
+        ctx.accounts.destination_mint.decimals,
+    )?;
+
+    // Emit global router swap event
+    emit_cpi!(RouterSwapEvent {
+        sender: ctx.accounts.user_transfer_authority.key(),
+        recipient: ctx.accounts.user_destination_token_account.key(),
+        input_mint: ctx.accounts.source_mint.key(),
+        output_mint: ctx.accounts.destination_mint.key(),
+        input_amount: in_amount,
+        output_amount,
+        fee_amount,
+        fee_account,
+        slippage_bps,
+    });
 
     Ok(output_amount)
 }

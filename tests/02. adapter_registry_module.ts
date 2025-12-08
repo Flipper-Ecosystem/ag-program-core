@@ -875,7 +875,20 @@ describe("Flipper Swap Protocol - Adapter Registry Module", () => {
 
             const registryAccount = await program.account.adapterRegistry.fetch(adapterRegistry);
             assert.equal(registryAccount.authority.toString(), newAuthority.publicKey.toString());
-            currentAuthority = newAuthority; // Update current authority
+
+
+            const wallet = provider.wallet as anchor.Wallet;
+            await program.methods
+                .changeAuthority()
+                .accounts({
+                    adapterRegistry,
+                    authority: newAuthority.publicKey,
+                    newAuthority: wallet.publicKey,
+                })
+                .signers([newAuthority])
+                .rpc();
+
+            currentAuthority = wallet.payer
         } catch (error) {
             if (error instanceof anchor.web3.SendTransactionError) {
                 const logs = await error.getLogs(provider.connection);

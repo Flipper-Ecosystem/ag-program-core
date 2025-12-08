@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::program::invoke;
 use anchor_spl::token::{Token, TokenAccount};
 use crate::adapters::adapter_connector_module::{AdapterContext};
 use crate::adapters::dex_adapter::DexAdapter;
@@ -34,23 +35,25 @@ impl DexAdapter for RaydiumAdapter {
         ctx: AdapterContext,
         amount: u64,
         remaining_accounts_start_index: usize,
+        remaining_accounts_count: usize,
     ) -> Result<SwapResult> {
-        msg!("Executing Raydium CPMM swap_base_input, amount: {}", amount);
 
-        // Ensure we have at least the required accounts for swap_base_input
-        // From IDL: payer, authority, amm_config, pool_state, input_token_account,
-        // output_token_account, input_vault, output_vault, input_token_program,
-        // output_token_program, input_token_mint, output_token_mint, observation_state
-        const MIN_ACCOUNTS: usize = 12;
-        if ctx.remaining_accounts.len() < remaining_accounts_start_index + MIN_ACCOUNTS {
+        const MIN_ACCOUNTS: usize = 11;
+
+        if remaining_accounts_count < MIN_ACCOUNTS {
             return Err(ErrorCode::NotEnoughAccountKeys.into());
         }
 
-        // Get slice of remaining accounts starting from our index
-        let remaining_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..];
+        // Get adapter-specific slice of remaining accounts
+        let end_index = remaining_accounts_start_index + remaining_accounts_count;
+        if ctx.remaining_accounts.len() < end_index {
+            return Err(ErrorCode::NotEnoughAccountKeys.into());
+        }
 
-        // Validate pool is enabled
-        let pool_info = Account::<PoolInfo>::try_from(&remaining_accounts[0])?;
+        let adapter_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..end_index];
+
+        // Validate pool is enabled (pool_info is at index 0)
+        let pool_info = Account::<PoolInfo>::try_from(&adapter_accounts[0])?;
         if !pool_info.enabled {
             return Err(ErrorCode::PoolDisabled.into());
         }
@@ -62,47 +65,46 @@ impl DexAdapter for RaydiumAdapter {
         // Create swap_base_input instruction arguments
         let swap_args = SwapBaseInputArgs {
             amount_in: amount,
-            minimum_amount_out: 0, // No slippage protection in this example
+            minimum_amount_out: 0,
         };
 
-        // Prepare instruction data with discriminator and serialized arguments
+        // Prepare instruction data
         let mut instruction_data = Vec::new();
         instruction_data.extend_from_slice(&SWAP_BASE_INPUT_DISCRIMINATOR);
         instruction_data.extend_from_slice(&swap_args.try_to_vec()?);
 
-        // Build account metas for the instruction
-        // Order must match Raydium CPMM swap_base_input interface exactly
+        // Build account metas using adapter_accounts (skip pool_info at index 0)
         let accounts = vec![
-            AccountMeta::new_readonly(ctx.authority.key(), true),       // payer (signer)
-            AccountMeta::new_readonly(remaining_accounts[1].key(), false), // authority (PDA)
-            AccountMeta::new_readonly(remaining_accounts[2].key(), false), // amm_config
-            AccountMeta::new(remaining_accounts[3].key(), false),       // pool_state
-            AccountMeta::new(ctx.input_account.key(), false),           // input_token_account
-            AccountMeta::new(ctx.output_account.key(), false),          // output_token_account
-            AccountMeta::new(remaining_accounts[4].key(), false),       // input_vault
-            AccountMeta::new(remaining_accounts[5].key(), false),       // output_vault
-            AccountMeta::new_readonly(remaining_accounts[6].key(), false), // input_token_program
-            AccountMeta::new_readonly(remaining_accounts[7].key(), false), // output_token_program
-            AccountMeta::new_readonly(remaining_accounts[8].key(), false), // input_token_mint
-            AccountMeta::new_readonly(remaining_accounts[9].key(), false), // output_token_mint
-            AccountMeta::new(remaining_accounts[10].key(), false),      // observation_state
+            AccountMeta::new_readonly(ctx.authority.key(), true),           // payer (signer)
+            AccountMeta::new_readonly(adapter_accounts[1].key(), false),    // authority (PDA)
+            AccountMeta::new_readonly(adapter_accounts[2].key(), false),    // amm_config
+            AccountMeta::new(adapter_accounts[3].key(), false),             // pool_state
+            AccountMeta::new(ctx.input_account.key(), false),               // input_token_account
+            AccountMeta::new(ctx.output_account.key(), false),              // output_token_account
+            AccountMeta::new(adapter_accounts[4].key(), false),             // input_vault
+            AccountMeta::new(adapter_accounts[5].key(), false),             // output_vault
+            AccountMeta::new_readonly(adapter_accounts[6].key(), false),    // input_token_program
+            AccountMeta::new_readonly(adapter_accounts[7].key(), false),    // output_token_program
+            AccountMeta::new_readonly(adapter_accounts[8].key(), false),    // input_token_mint
+            AccountMeta::new_readonly(adapter_accounts[9].key(), false),    // output_token_mint
+            AccountMeta::new(adapter_accounts[10].key(), false),            // observation_state
         ];
 
         // Build AccountInfo vector
         let account_infos = vec![
             ctx.authority.clone(),          // payer
-            remaining_accounts[1].clone(),  // authority
-            remaining_accounts[2].clone(),  // amm_config
-            remaining_accounts[3].clone(),  // pool_state
+            adapter_accounts[1].clone(),    // authority
+            adapter_accounts[2].clone(),    // amm_config
+            adapter_accounts[3].clone(),    // pool_state
             ctx.input_account.clone(),      // input_token_account
             ctx.output_account.clone(),     // output_token_account
-            remaining_accounts[4].clone(),  // input_vault
-            remaining_accounts[5].clone(),  // output_vault
-            remaining_accounts[6].clone(),  // input_token_program
-            remaining_accounts[7].clone(),  // output_token_program
-            remaining_accounts[8].clone(),  // input_token_mint
-            remaining_accounts[9].clone(),  // output_token_mint
-            remaining_accounts[10].clone(), // observation_state
+            adapter_accounts[4].clone(),    // input_vault
+            adapter_accounts[5].clone(),    // output_vault
+            adapter_accounts[6].clone(),    // input_token_program
+            adapter_accounts[7].clone(),    // output_token_program
+            adapter_accounts[8].clone(),    // input_token_mint
+            adapter_accounts[9].clone(),    // output_token_mint
+            adapter_accounts[10].clone(),   // observation_state
         ];
 
         // Create the instruction
@@ -112,7 +114,7 @@ impl DexAdapter for RaydiumAdapter {
             data: instruction_data,
         };
 
-        // Find PDA for vault authority with proper seed derivation
+        // Find vault authority PDA and verify that ctx.authority matches it
         let (vault_authority_pda, vault_authority_bump) = Pubkey::find_program_address(
             &[b"vault_authority"],
             &ctx.program_id,
@@ -122,11 +124,6 @@ impl DexAdapter for RaydiumAdapter {
         if ctx.authority.key() != vault_authority_pda {
             return Err(ErrorCode::InvalidAccount.into());
         }
-
-        let vault_authority_bump = Pubkey::find_program_address(
-            &[b"vault_authority"],
-            &ctx.program_id,
-        ).1;
 
         // Prepare signer seeds for CPI call
         let authority_seeds: &[&[u8]] = &[b"vault_authority", &[vault_authority_bump]];
@@ -145,35 +142,39 @@ impl DexAdapter for RaydiumAdapter {
         Ok(SwapResult { output_amount })
     }
 
-    /// Validate that all required accounts are provided and valid
     fn validate_accounts(
         &self,
         ctx: AdapterContext,
         remaining_accounts_start_index: usize,
+        remaining_accounts_count: usize,
     ) -> Result<()> {
-        const MIN_ACCOUNTS: usize = 12;
+        const MIN_ACCOUNTS: usize = 11;
 
-        // Ensure minimum required accounts are present
-        if ctx.remaining_accounts.len() < remaining_accounts_start_index + MIN_ACCOUNTS {
+        if remaining_accounts_count < MIN_ACCOUNTS {
             return Err(ErrorCode::NotEnoughAccountKeys.into());
         }
 
-        // Get efficient slice access
-        let remaining_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..];
+        // Get adapter-specific slice of remaining accounts
+        let end_index = remaining_accounts_start_index + remaining_accounts_count;
+        if ctx.remaining_accounts.len() < end_index {
+            return Err(ErrorCode::NotEnoughAccountKeys.into());
+        }
 
-        // Validate pool is enabled and matches expected address
-        let pool_info = Account::<PoolInfo>::try_from(&remaining_accounts[0])?;
+        let adapter_accounts = &ctx.remaining_accounts[remaining_accounts_start_index..end_index];
+
+        // Validate pool is enabled (pool_info is at index 0)
+        let pool_info = Account::<PoolInfo>::try_from(&adapter_accounts[0])?;
         if !pool_info.enabled {
             return Err(ErrorCode::PoolDisabled.into());
         }
 
-        let pool_state = &remaining_accounts[3];
+        let pool_state = &adapter_accounts[3]; // pool_state is at index 3 in adapter_accounts
         if pool_info.pool_address != pool_state.key() {
             return Err(ErrorCode::InvalidPoolAddress.into());
         }
 
-        // Validate authority PDA (seeds = [b"vault_and_lp_mint_auth_seed"])
-        let authority = &remaining_accounts[1];
+        // Validate authority PDA
+        let authority = &adapter_accounts[1];
         let expected_authority = Pubkey::find_program_address(
             &[b"vault_and_lp_mint_auth_seed"],
             &self.program_id,
@@ -183,9 +184,9 @@ impl DexAdapter for RaydiumAdapter {
             return Err(ErrorCode::InvalidCpiInterface.into());
         }
 
-        // Validate token programs are correct (SPL Token or Token2022)
-        let input_token_program = &remaining_accounts[6];
-        let output_token_program = &remaining_accounts[7];
+        // Validate token programs are correct
+        let input_token_program = &adapter_accounts[6];
+        let output_token_program = &adapter_accounts[7];
 
         let valid_token_programs = [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID];
         if !valid_token_programs.contains(&input_token_program.key())
@@ -194,7 +195,7 @@ impl DexAdapter for RaydiumAdapter {
             return Err(ErrorCode::InvalidCpiInterface.into());
         }
 
-        // Ensure critical accounts are not default (empty) pubkeys
+        // Ensure critical accounts are not default
         if pool_state.key() == Pubkey::default() {
             return Err(ErrorCode::InvalidAccount.into());
         }

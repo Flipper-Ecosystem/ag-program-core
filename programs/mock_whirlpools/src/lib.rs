@@ -4,7 +4,7 @@ use anchor_spl::{
     token_interface::{Mint, TokenAccount, TokenInterface, transfer_checked, TransferChecked},
 };
 
-declare_id!("Fa6sgRmBda2UJpBT1tV3bq27JkLjuRYvnt6TxWqAJT5F");
+declare_id!("CZUz9mp2h2gStQ7tKzvAjyCvW3tUgBXcSA6E6atHXxCD");
 
 #[program]
 pub mod mock_whirlpool_swap {
@@ -15,7 +15,6 @@ pub mod mock_whirlpool_swap {
         initial_token_a_amount: u64,
         initial_token_b_amount: u64,
     ) -> Result<()> {
-        // Validate mints are owned by the provided token programs
         require!(
             ctx.accounts.token_mint_a.to_account_info().owner == &ctx.accounts.token_program_a.key(),
             ErrorCode::InvalidTokenProgram
@@ -24,22 +23,20 @@ pub mod mock_whirlpool_swap {
             ctx.accounts.token_mint_b.to_account_info().owner == &ctx.accounts.token_program_b.key(),
             ErrorCode::InvalidTokenProgram
         );
-
-        // Validate initial amounts
         require!(initial_token_a_amount > 0, ErrorCode::ZeroAmount);
         require!(initial_token_b_amount > 0, ErrorCode::ZeroAmount);
 
-        // Initialize whirlpool state
         let whirlpool = &mut ctx.accounts.whirlpool;
+        whirlpool.token_mint_a = ctx.accounts.token_mint_a.key();
+        whirlpool.token_mint_b = ctx.accounts.token_mint_b.key();
         whirlpool.token_vault_a = ctx.accounts.token_vault_a.key();
         whirlpool.token_vault_b = ctx.accounts.token_vault_b.key();
         whirlpool.token_vault_a_amount = initial_token_a_amount;
         whirlpool.token_vault_b_amount = initial_token_b_amount;
-        whirlpool.sqrt_price = 4295048016; // Simplified sqrt price
+        whirlpool.sqrt_price = 4295048016;
         whirlpool.liquidity = initial_token_a_amount as u128 * initial_token_b_amount as u128;
         whirlpool.tick_current_index = 0;
 
-        // Transfer initial tokens to vaults
         transfer_checked(
             CpiContext::new(
                 ctx.accounts.token_program_a.to_account_info(),
@@ -68,21 +65,29 @@ pub mod mock_whirlpool_swap {
             ctx.accounts.token_mint_b.decimals,
         )?;
 
+        // Initialize tick arrays
+        let tick_array_0 = &mut ctx.accounts.tick_array_0;
+        tick_array_0.whirlpool = whirlpool.key();
+        tick_array_0.start_tick_index = -100;
+
+        let tick_array_1 = &mut ctx.accounts.tick_array_1;
+        tick_array_1.whirlpool = whirlpool.key();
+        tick_array_1.start_tick_index = 0;
+
+        let tick_array_2 = &mut ctx.accounts.tick_array_2;
+        tick_array_2.whirlpool = whirlpool.key();
+        tick_array_2.start_tick_index = 100;
+
         Ok(())
     }
 
-    pub fn initialize_user_token_accounts(ctx: Context<InitializeUserTokenAccounts>) -> Result<()> {
-        // Validate mints are owned by the provided token programs
-        require!(
-            ctx.accounts.token_mint_a.to_account_info().owner == &ctx.accounts.token_program_a.key(),
-            ErrorCode::InvalidTokenProgram
-        );
-        require!(
-            ctx.accounts.token_mint_b.to_account_info().owner == &ctx.accounts.token_program_b.key(),
-            ErrorCode::InvalidTokenProgram
-        );
-
-        // User token accounts are created automatically by associated_token_program
+    pub fn initialize_supplemental_tick_array(
+        ctx: Context<InitializeSupplementalTickArray>,
+        start_tick_index: i32,
+    ) -> Result<()> {
+        let tick_array = &mut ctx.accounts.tick_array;
+        tick_array.whirlpool = ctx.accounts.whirlpool.key();
+        tick_array.start_tick_index = start_tick_index;
         Ok(())
     }
 
@@ -95,7 +100,7 @@ pub mod mock_whirlpool_swap {
         a_to_b: bool,
         _remaining_accounts_info: Option<RemainingAccountsInfo>,
     ) -> Result<()> {
-        // Validate mints are owned by the provided token programs
+
         require!(
             ctx.accounts.token_mint_a.to_account_info().owner == &ctx.accounts.token_program_a.key(),
             ErrorCode::InvalidTokenProgram
@@ -104,10 +109,6 @@ pub mod mock_whirlpool_swap {
             ctx.accounts.token_mint_b.to_account_info().owner == &ctx.accounts.token_program_b.key(),
             ErrorCode::InvalidTokenProgram
         );
-
-        // Validate input amounts
-        require!(amount > 0, ErrorCode::ZeroAmount);
-        require!(other_amount_threshold > 0, ErrorCode::ZeroAmount);
 
         let whirlpool = &mut ctx.accounts.whirlpool;
 
@@ -145,7 +146,6 @@ pub mod mock_whirlpool_swap {
             (calculated_in, amount)
         };
 
-        // Получаем ключи mint'ов для seeds
         let token_mint_a_key = ctx.accounts.token_mint_a.key();
         let token_mint_b_key = ctx.accounts.token_mint_b.key();
 
@@ -269,25 +269,40 @@ pub struct InitializePool<'info> {
     pub whirlpool: Account<'info, Whirlpool>,
 
     #[account(
-        init_if_needed,
+        init,
         payer = user,
-        associated_token::mint = token_mint_a,
-        associated_token::authority = user,
-        associated_token::token_program = token_program_a,
+        space = 8 + std::mem::size_of::<TickArray>(),
+        seeds = [b"tick_array", whirlpool.key().as_ref(), &(-100i32).to_le_bytes()],
+        bump,
     )]
-    pub user_token_a: InterfaceAccount<'info, TokenAccount>,
+    pub tick_array_0: Account<'info, TickArray>,
 
     #[account(
-        init_if_needed,
+        init,
         payer = user,
-        associated_token::mint = token_mint_b,
-        associated_token::authority = user,
-        associated_token::token_program = token_program_b,
+        space = 8 + std::mem::size_of::<TickArray>(),
+        seeds = [b"tick_array", whirlpool.key().as_ref(), &0i32.to_le_bytes()],
+        bump,
     )]
+    pub tick_array_1: Account<'info, TickArray>,
+
+    #[account(
+        init,
+        payer = user,
+        space = 8 + std::mem::size_of::<TickArray>(),
+        seeds = [b"tick_array", whirlpool.key().as_ref(), &100i32.to_le_bytes()],
+        bump,
+    )]
+    pub tick_array_2: Account<'info, TickArray>,
+
+    #[account(mut)]
+    pub user_token_a: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(mut)]
     pub user_token_b: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        init_if_needed,
+        init,
         payer = user,
         associated_token::mint = token_mint_a,
         associated_token::authority = whirlpool,
@@ -296,7 +311,7 @@ pub struct InitializePool<'info> {
     pub token_vault_a: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        init_if_needed,
+        init,
         payer = user,
         associated_token::mint = token_mint_b,
         associated_token::authority = whirlpool,
@@ -315,37 +330,24 @@ pub struct InitializePool<'info> {
 }
 
 #[derive(Accounts)]
-pub struct InitializeUserTokenAccounts<'info> {
+#[instruction(start_tick_index: i32)]
+pub struct InitializeSupplementalTickArray<'info> {
     #[account(mut)]
-    pub user: Signer<'info>,
+    pub payer: Signer<'info>,
+
+    /// CHECK: We only need to read the whirlpool key
+    pub whirlpool: UncheckedAccount<'info>,
 
     #[account(
-        init_if_needed,
-        payer = user,
-        associated_token::mint = token_mint_a,
-        associated_token::authority = user,
-        associated_token::token_program = token_program_a,
+        init,
+        payer = payer,
+        space = 8 + std::mem::size_of::<TickArray>(),
+        seeds = [b"tick_array", whirlpool.key().as_ref(), &start_tick_index.to_le_bytes()],
+        bump,
     )]
-    pub user_token_a: InterfaceAccount<'info, TokenAccount>,
+    pub tick_array: Account<'info, TickArray>,
 
-    #[account(
-        init_if_needed,
-        payer = user,
-        associated_token::mint = token_mint_b,
-        associated_token::authority = user,
-        associated_token::token_program = token_program_b,
-    )]
-    pub user_token_b: InterfaceAccount<'info, TokenAccount>,
-
-    pub token_mint_a: InterfaceAccount<'info, Mint>,
-    pub token_mint_b: InterfaceAccount<'info, Mint>,
-
-    pub token_program_a: Interface<'info, TokenInterface>,
-    pub token_program_b: Interface<'info, TokenInterface>,
-
-    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
@@ -362,53 +364,54 @@ pub struct SwapV2<'info> {
         mut,
         seeds = [b"whirlpool", token_mint_a.key().as_ref(), token_mint_b.key().as_ref()],
         bump,
-        has_one = token_vault_a,
-        has_one = token_vault_b,
     )]
     pub whirlpool: Box<Account<'info, Whirlpool>>,
 
-    #[account(
-        mut,
-        associated_token::mint = token_mint_a,
-        associated_token::authority = token_authority,
-        associated_token::token_program = token_program_a,
-    )]
-    pub token_owner_account_a: InterfaceAccount<'info, TokenAccount>,
-
-    #[account(
-        mut,
-        associated_token::mint = token_mint_b,
-        associated_token::authority = token_authority,
-        associated_token::token_program = token_program_b,
-    )]
-    pub token_owner_account_b: InterfaceAccount<'info, TokenAccount>,
-
-    #[account(
-        mut,
-        associated_token::mint = token_mint_a,
-        associated_token::authority = whirlpool,
-        associated_token::token_program = token_program_a,
-    )]
-    pub token_vault_a: InterfaceAccount<'info, TokenAccount>,
-
-    #[account(
-        mut,
-        associated_token::mint = token_mint_b,
-        associated_token::authority = whirlpool,
-        associated_token::token_program = token_program_b,
-    )]
-    pub token_vault_b: InterfaceAccount<'info, TokenAccount>,
-
-    /// CHECK: Oracle account (optional)
-    pub oracle: UncheckedAccount<'info>,
-
     pub token_mint_a: InterfaceAccount<'info, Mint>,
     pub token_mint_b: InterfaceAccount<'info, Mint>,
+
+    #[account(mut)]
+    pub token_owner_account_a: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub token_vault_a: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub token_owner_account_b: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut)]
+    pub token_vault_b: InterfaceAccount<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"tick_array", whirlpool.key().as_ref(), &(-100i32).to_le_bytes()],
+        bump,
+    )]
+    pub tick_array_0: Account<'info, TickArray>,
+
+    #[account(
+        mut,
+        seeds = [b"tick_array", whirlpool.key().as_ref(), &0i32.to_le_bytes()],
+        bump,
+    )]
+    pub tick_array_1: Account<'info, TickArray>,
+
+    #[account(
+        mut,
+        seeds = [b"tick_array", whirlpool.key().as_ref(), &100i32.to_le_bytes()],
+        bump,
+    )]
+    pub tick_array_2: Account<'info, TickArray>,
+
+    /// CHECK: Oracle account (optional)
+    pub oracle: UncheckedAccount<'info>
+
 }
 
 #[account]
 #[derive(Default)]
 pub struct Whirlpool {
+    pub token_mint_a: Pubkey,
+    pub token_mint_b: Pubkey,
     pub token_vault_a: Pubkey,
     pub token_vault_b: Pubkey,
     pub token_vault_a_amount: u64,
@@ -416,6 +419,13 @@ pub struct Whirlpool {
     pub sqrt_price: u128,
     pub liquidity: u128,
     pub tick_current_index: i32,
+}
+
+#[account]
+#[derive(Default)]
+pub struct TickArray {
+    pub whirlpool: Pubkey,
+    pub start_tick_index: i32,
 }
 
 #[error_code]

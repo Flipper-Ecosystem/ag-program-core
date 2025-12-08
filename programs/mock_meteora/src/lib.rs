@@ -4,7 +4,7 @@ use anchor_spl::{
     token_interface::{Mint, TokenAccount, TokenInterface, transfer_checked, TransferChecked},
 };
 
-declare_id!("699YWVLRa4T5Mxs3iNJGnpwP24JNckt25vW1pEMc5xrA");
+declare_id!("Ch3ntiZFPQYozofrWrjkUcKiyVrmmE5i1YodBDd7a5ax");
 
 #[program]
 pub mod mock_meteora_swap {
@@ -105,7 +105,6 @@ pub mod mock_meteora_swap {
 
         // Validate input amounts
         require!(amount_in > 0, ErrorCode::ZeroAmount);
-        require!(min_amount_out > 0, ErrorCode::ZeroAmount);
 
         // Load lb_pair state
         let lb_pair = &mut ctx.accounts.lb_pair;
@@ -399,7 +398,9 @@ pub struct Swap2<'info> {
     ///CHECK event authority
     pub event_authority: UncheckedAccount<'info>,
 
-    pub program: Program<'info, System>,
+    /// CHECK: The Meteora program itself (self-reference for CPI)
+    #[account(mut, executable)]
+    pub program: UncheckedAccount<'info>,
 }
 
 #[account]

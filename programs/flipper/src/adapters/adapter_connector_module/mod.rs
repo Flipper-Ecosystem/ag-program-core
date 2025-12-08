@@ -42,11 +42,10 @@ pub fn get_adapter(swap: &Swap, registry: &Account<AdapterRegistry>) -> Result<B
             Ok(Box::new(adapter))
         }
         Swap::Meteora => {
-            // Initialize Meteora Adapter with program ID
+            let program_id = registry.get_adapter_program_id(swap)?;
             let adapter = MeteoraAdapter {
-                program_id: registry.get_adapter_program_id(swap)?,
+                program_id,
             };
-            // Validate CPI interface for security
             adapter.validate_cpi(&adapter.program_id)?;
             Ok(Box::new(adapter))
         }

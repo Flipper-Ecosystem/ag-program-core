@@ -123,9 +123,91 @@ pub struct SwapEvent {
     pub output_amount: u64,  // Amount of output tokens
 }
 
+// Global event emitted when a router swap is completed
+#[event]
+pub struct RouterSwapEvent {
+    pub sender: Pubkey,              // User who initiated the swap
+    pub recipient: Pubkey,           // User who receives the output tokens
+    pub input_mint: Pubkey,          // Input token mint
+    pub output_mint: Pubkey,         // Output token mint
+    pub input_amount: u64,           // Initial input amount
+    pub output_amount: u64,          // Final output amount (after fees)
+    pub fee_amount: u64,             // Platform fee amount (0 if no fee)
+    pub fee_account: Option<Pubkey>,  // Platform fee account (None if no fee)
+    pub slippage_bps: u16,           // Slippage tolerance in basis points
+}
+
 #[event]
 pub struct RegistryReset {
     pub authority: Pubkey,
+}
+
+
+use anchor_lang::prelude::*;
+
+
+/// Event emitted when a limit order is executed
+#[event]
+pub struct LimitOrderCreated {
+    pub order: Pubkey,
+    pub creator: Pubkey,
+    pub input_mint: Pubkey,
+    pub output_mint: Pubkey,
+    pub input_amount: u64,
+    pub min_output_amount: u64,
+    pub trigger_price_bps: u32,
+    pub trigger_type: u8,
+    pub expiry: i64,
+}
+
+#[event]
+pub struct LimitOrderExecuted {
+    pub order: Pubkey,
+    pub executor: Pubkey,
+    pub input_amount: u64,
+    pub output_amount: u64,
+    pub fee_amount: u64,
+    pub trigger_type: u8,
+    pub min_output_amount: u64,
+}
+
+// Global event emitted when a limit order swap is executed
+#[event]
+pub struct LimitOrderSwapEvent {
+    pub order: Pubkey,                // Limit order account
+    pub sender: Pubkey,                // Order creator
+    pub recipient: Pubkey,             // User destination account
+    pub executor: Pubkey,               // Operator who executed the order
+    pub input_mint: Pubkey,            // Input token mint
+    pub output_mint: Pubkey,           // Output token mint
+    pub input_amount: u64,              // Input amount swapped
+    pub output_amount: u64,             // Final output amount (after fees)
+    pub fee_amount: u64,                // Platform fee amount (0 if no fee)
+    pub fee_account: Option<Pubkey>,    // Platform fee account (None if no fee)
+    pub trigger_type: u8,               // Trigger type (TakeProfit/StopLoss)
+}
+
+#[event]
+pub struct LimitOrderCancelled {
+    pub order: Pubkey,
+    pub creator: Pubkey,
+}
+
+#[event]
+pub struct LimitOrderClosed {
+    pub order: Pubkey,
+    pub closer: Pubkey,
+    pub status: u8,
+}
+
+#[event]
+pub struct RouteAndCreateOrderEvent {
+    pub order: Pubkey,
+    pub swap_input_mint: Pubkey,
+    pub swap_input_amount: u64,
+    pub swap_output_amount: u64,
+    pub fee_amount: u64,
+    pub order_input_amount: u64,
 }
 
 // Defines supported swap types for various DEX protocols

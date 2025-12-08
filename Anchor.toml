@@ -5,18 +5,28 @@ package_manager = "yarn"
 resolution = true
 skip-lint = false
 
+
+[programs.mainnet]
+flipper = "fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit"
+
+[programs.devnet]
+flipper = "fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit"
+mock_meteora = "Ch3ntiZFPQYozofrWrjkUcKiyVrmmE5i1YodBDd7a5ax"
+mock_raydium = "HTg2aCPRCYMMEbkx59TmQcyp4LcGZScoYksCBwJAfLNJ"
+mock_whirlpools = "CZUz9mp2h2gStQ7tKzvAjyCvW3tUgBXcSA6E6atHXxCD"
+
 [programs.localnet]
-flipper = "5958qddzZjU34CHUD4bisVBiYgDQ6EREwBLgpbVaSLX7"
-mock-raydium = "FmQ6x78hRZyXJcofk7NSHx9tvPEtEonjsMdAX6FQw7wm"
-mock_meteora = "699YWVLRa4T5Mxs3iNJGnpwP24JNckt25vW1pEMc5xrA"
-mock_whirlpools = "Fa6sgRmBda2UJpBT1tV3bq27JkLjuRYvnt6TxWqAJT5F"
+flipper = "fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit"
+mock_meteora = "Ch3ntiZFPQYozofrWrjkUcKiyVrmmE5i1YodBDd7a5ax"
+mock_raydium = "HTg2aCPRCYMMEbkx59TmQcyp4LcGZScoYksCBwJAfLNJ"
+mock_whirlpools = "CZUz9mp2h2gStQ7tKzvAjyCvW3tUgBXcSA6E6atHXxCD"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
 cluster = "localnet"
-wallet = "~/.config/solana/id.json"
+wallet = "~/.config/solana/fpp-staging.json"
 
 [scripts]
 test = "npx ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
