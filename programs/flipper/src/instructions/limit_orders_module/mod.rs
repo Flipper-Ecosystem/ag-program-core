@@ -679,6 +679,124 @@ pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>) -> Result<()> {
     Ok(())
 }
 
+/// Cancel expired limit order by operator instruction accounts
+#[event_cpi]
+#[derive(Accounts)]
+pub struct CancelExpiredLimitOrderByOperator<'info> {
+    /// Adapter registry for operator validation
+    #[account(
+        seeds = [b"adapter_registry"],
+        bump
+    )]
+    pub adapter_registry: Account<'info, AdapterRegistry>,
+
+    /// Vault authority controlling token transfers
+    #[account(
+        seeds = [b"vault_authority"],
+        bump
+    )]
+    pub vault_authority: Account<'info, VaultAuthority>,
+
+    /// Limit order to cancel (must be open and expired, rent goes to operator)
+    #[account(
+        mut,
+        close = operator,
+        constraint = limit_order.status == OrderStatus::Open @ ErrorCode::InvalidOrderStatus
+    )]
+    pub limit_order: Account<'info, LimitOrder>,
+
+    /// Vault holding input tokens (will be closed, rent goes to creator)
+    #[account(
+        mut,
+        constraint = input_vault.key() == limit_order.input_vault @ ErrorCode::InvalidVaultAddress,
+        constraint = input_vault.mint == limit_order.input_mint @ ErrorCode::InvalidMint
+    )]
+    pub input_vault: InterfaceAccount<'info, TokenAccount>,
+
+    /// User's account to receive refunded tokens
+    #[account(
+        mut,
+        constraint = user_input_token_account.mint == limit_order.input_mint,
+        constraint = user_input_token_account.owner == limit_order.creator
+    )]
+    pub user_input_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    /// Input token mint (must match limit_order.input_mint)
+    #[account(
+        constraint = input_mint.key() == limit_order.input_mint @ ErrorCode::InvalidMint
+    )]
+    pub input_mint: InterfaceAccount<'info, Mint>,
+    /// Token program for input tokens
+    pub input_token_program: Interface<'info, TokenInterface>,
+
+    /// Operator cancelling the order (must be registered, receives rent from closed limit_order and input_vault)
+    #[account(
+        mut,
+        signer,
+        constraint = adapter_registry.operators.contains(&operator.key()) @ ErrorCode::InvalidOperator
+    )]
+    pub operator: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Cancels an expired open limit order by operator and refunds tokens to creator
+/// Rent from limit_order account goes to operator, rent from input_vault + tokens go to creator
+pub fn cancel_expired_limit_order_by_operator(ctx: Context<CancelExpiredLimitOrderByOperator>) -> Result<()> {
+    // Check if order has expired
+    let now = Clock::get()?.unix_timestamp;
+    if now < ctx.accounts.limit_order.expiry {
+        return Err(ErrorCode::InvalidExpiry.into());
+    }
+
+    // Prepare PDA signer seeds
+    let vault_authority_bump = ctx.bumps.vault_authority;
+    let authority_seeds: &[&[u8]] = &[
+        b"vault_authority".as_ref(),
+        &[vault_authority_bump],
+    ];
+    let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
+
+    // Refund input tokens to creator (deposit)
+    transfer_checked(
+        CpiContext::new_with_signer(
+            ctx.accounts.input_token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.input_vault.to_account_info(),
+                to: ctx.accounts.user_input_token_account.to_account_info(),
+                authority: ctx.accounts.vault_authority.to_account_info(),
+                mint: ctx.accounts.input_mint.to_account_info(),
+            },
+            signer_seeds
+        ),
+        ctx.accounts.limit_order.input_amount,
+        ctx.accounts.input_mint.decimals,
+    )?;
+
+    // Emit cancellation event before account is closed
+    emit_cpi!(LimitOrderCancelled {
+        order: ctx.accounts.limit_order.key(),
+        creator: ctx.accounts.limit_order.creator,
+    });
+
+    // Close input_vault and return rent to operator
+    // All tokens have been refunded to creator, so vault is empty
+    close_account(
+        CpiContext::new_with_signer(
+            ctx.accounts.input_token_program.to_account_info(),
+            CloseAccount {
+                account: ctx.accounts.input_vault.to_account_info(),
+                destination: ctx.accounts.operator.to_account_info(), // Rent goes to operator
+                authority: ctx.accounts.vault_authority.to_account_info(),
+            },
+            signer_seeds
+        )
+    )?;
+
+    // Account will be closed automatically and rent transferred to operator due to `close = operator`
+    Ok(())
+}
+
 /// Close limit order by operator instruction accounts
 #[event_cpi]
 #[derive(Accounts)]

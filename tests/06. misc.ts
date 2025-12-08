@@ -1244,7 +1244,193 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             );
         });
 
-        it("7.3. Close limit order by operator - should fail for open order", async () => {
+        it("7.3. Cancel expired limit order by operator - verify rent goes to operator and tokens to creator", async () => {
+            const nonce = new BN(Date.now());
+            const inputAmount = new BN(50_000_000);
+            const minOutputAmount = new BN(45_000_000);
+            const triggerPriceBps = 1000;
+            const triggerType = { takeProfit: {} };
+            // Set expiry to past time (expired)
+            const expiry = new BN(Math.floor(Date.now() / 1000) - 3600); // 1 hour ago
+            const slippageBps = 300;
+
+            const [limitOrder] = PublicKey.findProgramAddressSync(
+                [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+                program.programId
+            );
+
+            const [orderVault] = PublicKey.findProgramAddressSync(
+                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                program.programId
+            );
+
+            // Create order with expired time (we'll need to create it with future expiry first, then wait or use a workaround)
+            // Actually, we can't create an order with past expiry, so we'll create it with future expiry
+            // and then manually set the clock forward or use a different approach
+            // For testing, let's create with a very short expiry and wait, or better yet, create with future expiry
+            // and then use cancel_expired_limit_order_by_operator which checks expiry
+            
+            // Create order with future expiry first
+            const futureExpiry = new BN(Math.floor(Date.now() / 1000) + 3600);
+            await program.methods
+                .createLimitOrder(
+                    nonce,
+                    inputAmount,
+                    minOutputAmount,
+                    triggerPriceBps,
+                    triggerType,
+                    futureExpiry,
+                    slippageBps
+                )
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    userInputTokenAccount: userSourceTokenAccount,
+                    userDestinationTokenAccount: userDestinationTokenAccount,
+                    inputMint: sourceMint,
+                    outputMint: destinationMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    outputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([user])
+                .rpc();
+
+            // Verify order account exists and is open
+            const orderAccountBefore = await program.account.limitOrder.fetch(limitOrder);
+            assert.equal(orderAccountBefore.status.open !== undefined, true, "Order should be open");
+
+            // Get initial balances
+            const initialOperatorBalance = await provider.connection.getBalance(operator.publicKey);
+            const initialUserBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
+
+            // Note: In a real scenario, we would wait for the order to expire
+            // For testing purposes, we'll create a new order with past expiry using a different nonce
+            // Actually, we can't create an order with past expiry due to validation
+            // So we need to wait or use a different approach
+            
+            // Let's create another order with a very short expiry and wait, or better:
+            // We'll test the function by creating an order and then manually checking expiry
+            // But since we can't modify the order's expiry after creation, we need to wait
+            
+            // For now, let's test with a non-expired order to verify the function fails correctly
+            // Then we can add a test that waits for expiry
+            
+            // Try to cancel non-expired order - should fail
+            try {
+                await program.methods
+                    .cancelExpiredLimitOrderByOperator()
+                    .accounts({
+                        adapterRegistry,
+                        vaultAuthority,
+                        limitOrder,
+                        inputVault: orderVault,
+                        userInputTokenAccount: userSourceTokenAccount,
+                        inputMint: sourceMint,
+                        inputTokenProgram: TOKEN_PROGRAM_ID,
+                        operator: operator.publicKey,
+                        systemProgram: SystemProgram.programId,
+                    })
+                    .signers([operator])
+                    .rpc();
+                assert.fail("Should have failed - order is not expired");
+            } catch (error: any) {
+                assert(
+                    error.message.includes("InvalidExpiry") || error.message.includes("constraint"),
+                    "Should fail with InvalidExpiry error for non-expired order"
+                );
+            }
+
+            // Now create a new order with past expiry by using a different nonce
+            // Actually, we can't create with past expiry, so let's wait a bit and create a new order
+            // with very short expiry, then wait for it to expire
+            
+            const expiredNonce = new BN(Date.now() + 1);
+            const [expiredLimitOrder] = PublicKey.findProgramAddressSync(
+                [Buffer.from("limit_order"), user.publicKey.toBuffer(), expiredNonce.toArrayLike(Buffer, 'le', 8)],
+                program.programId
+            );
+
+            const [expiredOrderVault] = PublicKey.findProgramAddressSync(
+                [Buffer.from("order_vault"), expiredLimitOrder.toBuffer()],
+                program.programId
+            );
+
+            // Create order with 1 second expiry
+            const shortExpiry = new BN(Math.floor(Date.now() / 1000) + 1);
+            await program.methods
+                .createLimitOrder(
+                    expiredNonce,
+                    inputAmount,
+                    minOutputAmount,
+                    triggerPriceBps,
+                    triggerType,
+                    shortExpiry,
+                    slippageBps
+                )
+                .accounts({
+                    vaultAuthority,
+                    limitOrder: expiredLimitOrder,
+                    inputVault: expiredOrderVault,
+                    userInputTokenAccount: userSourceTokenAccount,
+                    userDestinationTokenAccount: userDestinationTokenAccount,
+                    inputMint: sourceMint,
+                    outputMint: destinationMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    outputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([user])
+                .rpc();
+
+            // Wait for order to expire (wait 2 seconds to be sure)
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Get balances before cancellation
+            const beforeOperatorBalance = await provider.connection.getBalance(operator.publicKey);
+            const beforeUserTokenBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
+
+            // Cancel expired order by operator
+            await program.methods
+                .cancelExpiredLimitOrderByOperator()
+                .accounts({
+                    adapterRegistry,
+                    vaultAuthority,
+                    limitOrder: expiredLimitOrder,
+                    inputVault: expiredOrderVault,
+                    userInputTokenAccount: userSourceTokenAccount,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([operator])
+                .rpc();
+
+            // Verify order account is closed
+            const expiredOrderAccountInfo = await provider.connection.getAccountInfo(expiredLimitOrder);
+            assert.equal(expiredOrderAccountInfo, null, "Expired order account should be closed");
+
+            // Verify operator received rent from both limit_order and input_vault accounts
+            const afterOperatorBalance = await provider.connection.getBalance(operator.publicKey);
+            assert(
+                afterOperatorBalance > beforeOperatorBalance,
+                "Operator should receive rent from closed limit_order and input_vault accounts"
+            );
+
+            // Verify creator received tokens (deposit)
+            const afterUserTokenBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
+            assert.equal(
+                afterUserTokenBalance.toString(),
+                (beforeUserTokenBalance + BigInt(inputAmount.toString())).toString(),
+                "Creator should receive refunded tokens"
+            );
+        });
+
+        it("7.4. Close limit order by operator - should fail for open order", async () => {
             const nonce = new BN(Date.now());
             const inputAmount = new BN(50_000_000);
             const minOutputAmount = new BN(45_000_000);
@@ -1313,7 +1499,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             }
         });
 
-        it("7.4. Close limit order by operator - should fail for non-operator", async () => {
+        it("7.5. Close limit order by operator - should fail for non-operator", async () => {
             const nonce = new BN(Date.now());
             const inputAmount = new BN(50_000_000);
             const minOutputAmount = new BN(45_000_000);
