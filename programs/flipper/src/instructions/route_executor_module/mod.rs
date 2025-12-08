@@ -22,13 +22,7 @@ fn calculate_adapter_accounts_range(
 ) -> (usize, usize) {
     let start_index = step.input_index as usize + 1; // Skip input vault itself
 
-    let end_index = if step_index == route_plan.len() - 1 {
-        // For last step: use output_index (excluding user destination account)
-        step.output_index as usize
-    } else {
-        // For intermediate steps: use output_index + 1 (including output vault)
-        step.output_index as usize + 1
-    };
+    let end_index = step.output_index as usize;
 
     let count = end_index.saturating_sub(start_index);
     (start_index, count)
