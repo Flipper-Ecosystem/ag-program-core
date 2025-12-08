@@ -931,6 +931,18 @@ pub fn route_and_create_order<'info>(
         in_amount,
     )?;
 
+    // CRITICAL: Validate that the last step's output_index points to ctx.accounts.input_vault
+    // This ensures swap output actually goes to the order vault, not some other account
+    if route_plan.is_empty() {
+        return Err(ErrorCode::EmptyRoute.into());
+    }
+    let last_step = &route_plan[route_plan.len() - 1];
+    let actual_output_vault = &ctx.remaining_accounts[last_step.output_index as usize];
+    require!(
+        actual_output_vault.key() == ctx.accounts.input_vault.key(),
+        ErrorCode::InvalidAccount
+    );
+
     // ===== STEP 2: TRANSFER TOKENS FROM USER TO TEMP VAULT =====
 
     // Find or use first vault in remaining accounts as temporary swap source
