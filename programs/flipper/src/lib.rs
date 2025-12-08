@@ -172,7 +172,6 @@ pub mod flipper {
         platform_fee_bps: u8,
         order_min_output_amount: u64,
         order_trigger_price_bps: u32,
-        order_trigger_type: TriggerType,
         order_expiry: i64,
         order_slippage_bps: u16,
     ) -> Result<(u64, Pubkey)> {
@@ -186,7 +185,6 @@ pub mod flipper {
             platform_fee_bps,
             order_min_output_amount,
             order_trigger_price_bps,
-            order_trigger_type,
             order_expiry,
             order_slippage_bps
         )
