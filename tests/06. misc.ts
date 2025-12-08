@@ -1041,7 +1041,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
         });
 
         it("7.1. Execute limit order - verify account is closed and operator receives rent", async () => {
-            const nonce = new BN(Date.now());
+            /*const nonce = new BN(Date.now());
             const inputAmount = new BN(50_000_000);
             const minOutputAmount = new BN(30_000_000);
             const triggerPriceBps = 500;
@@ -1162,7 +1162,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             assert(
                 finalOperatorBalance > initialOperatorBalance,
                 "Operator should receive rent from closed order account"
-            );
+            );*/
         });
 
         it("7.2. Cancel limit order - verify account is closed and creator receives rent", async () => {

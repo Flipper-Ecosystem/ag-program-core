@@ -5,6 +5,10 @@ package_manager = "yarn"
 resolution = true
 skip-lint = false
 
+
+[programs.mainnet]
+flipper = "fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit"
+
 [programs.devnet]
 flipper = "fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit"
 mock_meteora = "Ch3ntiZFPQYozofrWrjkUcKiyVrmmE5i1YodBDd7a5ax"
@@ -21,8 +25,8 @@ mock_whirlpools = "CZUz9mp2h2gStQ7tKzvAjyCvW3tUgBXcSA6E6atHXxCD"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "mainnet"
-wallet = "~/.config/solana/flpp-staging.json"
+cluster = "localnet"
+wallet = "~/.config/solana/fpp-staging.json"
 
 [scripts]
 test = "npx ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
