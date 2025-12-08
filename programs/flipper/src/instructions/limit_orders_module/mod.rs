@@ -977,7 +977,6 @@ pub struct RouteAndCreateOrder<'info> {
 /// * `platform_fee_bps` - Platform fee for swap in basis points
 /// * `order_min_output_amount` - Minimum output amount for the limit order
 /// * `order_trigger_price_bps` - Trigger deviation percentage in basis points
-/// * `order_trigger_type` - Type of trigger (TakeProfit or StopLoss)
 /// * `order_expiry` - Order expiration timestamp
 /// * `order_slippage_bps` - Slippage tolerance for order execution
 ///
@@ -993,7 +992,6 @@ pub fn route_and_create_order<'info>(
     platform_fee_bps: u8,
     order_min_output_amount: u64,
     order_trigger_price_bps: u32,
-    order_trigger_type: TriggerType,
     order_expiry: i64,
     order_slippage_bps: u16,
 ) -> Result<(u64, Pubkey)> {
@@ -1010,24 +1008,13 @@ pub fn route_and_create_order<'info>(
         order_trigger_price_bps > 0,
         ErrorCode::InvalidTriggerPrice
     );
-    // Validate upper bound based on trigger type
-    match order_trigger_type {
-        TriggerType::StopLoss => {
-            // StopLoss: max 10,000 (100%) to prevent underflow in should_execute
-            require!(
-                order_trigger_price_bps <= 10_000,
-                ErrorCode::InvalidTriggerPrice
-            );
-        },
-        TriggerType::TakeProfit => {
-            // TakeProfit: Allow up to 100,000 (1000%) for higher profit targets
-            // 10_000 + 100_000 = 110_000 fits in u64, so no overflow risk
-            require!(
-                order_trigger_price_bps <= 100_000,
-                ErrorCode::InvalidTriggerPrice
-            );
-        }
-    }
+    // Validate upper bound for TakeProfit (always TakeProfit for route_and_create_order)
+    // TakeProfit: Allow up to 100,000 (1000%) for higher profit targets
+    // 10_000 + 100_000 = 110_000 fits in u64, so no overflow risk
+    require!(
+        order_trigger_price_bps <= 100_000,
+        ErrorCode::InvalidTriggerPrice
+    );
     require!(
         order_expiry > Clock::get()?.unix_timestamp,
         ErrorCode::InvalidExpiry
@@ -1209,7 +1196,7 @@ pub fn route_and_create_order<'info>(
     order.input_amount = out_amount; // Amount after fee
     order.min_output_amount = order_min_output_amount;
     order.trigger_price_bps = order_trigger_price_bps;
-    order.trigger_type = order_trigger_type;
+    order.trigger_type = TriggerType::TakeProfit; // Always TakeProfit for route_and_create_order
     order.expiry = order_expiry;
     order.status = OrderStatus::Open;
     order.slippage_bps = order_slippage_bps;

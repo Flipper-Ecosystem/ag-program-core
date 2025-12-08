@@ -797,7 +797,6 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
                 swapPlatformFeeBps,
                 orderMinOutputAmount,
                 orderTriggerPriceBps,
-                { takeProfit: {} },
                 orderExpiry,
                 orderSlippageBps
             )

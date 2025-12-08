@@ -763,7 +763,6 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 swapPlatformFeeBps,
                 orderMinOutputAmount,
                 orderTriggerPriceBps,
-                { takeProfit: {} },
                 orderExpiry,
                 orderSlippageBps
             )
