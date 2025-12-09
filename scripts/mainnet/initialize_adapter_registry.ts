@@ -6,14 +6,15 @@ import fs from "fs";
 
 // Function to load keypair for mainnet wallet
 const loadKeypair = (): Keypair => {
-    // Use the wallet path from Anchor.toml or default to staging wallet
-    const keypairPath = process.env.WALLET_PATH || process.env.HOME + "/.config/solana/flpp-staging.json";
+    const keypairPath = process.env.HOME + "/.config/solana/fpp-staging.json";
     if (fs.existsSync(keypairPath)) {
         const secretKey = JSON.parse(fs.readFileSync(keypairPath, "utf8"));
         return Keypair.fromSecretKey(Uint8Array.from(secretKey));
     }
-    throw new Error(`Keypair file not found at ${keypairPath}. Please set WALLET_PATH environment variable or place wallet at default location.`);
+    console.warn("Keypair file not found, generating a new one for localnet.");
+    return Keypair.generate();
 };
+
 
 // Configure connection to Solana Mainnet
 const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
