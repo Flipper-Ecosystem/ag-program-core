@@ -133,7 +133,7 @@ impl DexAdapter for WhirlpoolAdapter {
             AccountMeta::new(adapter_accounts[11].key(), false),             // tick_array_0
             AccountMeta::new(adapter_accounts[12].key(), false),             // tick_array_1
             AccountMeta::new(adapter_accounts[13].key(), false),            // tick_array_2
-            AccountMeta::new_readonly(adapter_accounts[14].key(), false),   // oracle
+            AccountMeta::new(adapter_accounts[14].key(), false),            // oracle
         ];
 
 

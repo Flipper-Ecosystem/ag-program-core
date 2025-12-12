@@ -606,7 +606,7 @@ describe("Flipper Swap Protocol - Whirlpools Swap and Limit Orders", () => {
             { pubkey: tickArray0, isWritable: true, isSigner: false },           // 12: tick_array_0
             { pubkey: tickArray1, isWritable: true, isSigner: false },           // 13: tick_array_1
             { pubkey: tickArray2, isWritable: true, isSigner: false },           // 14: tick_array_2
-            { pubkey: whirlpoolOracle, isWritable: false, isSigner: false },     // 15: oracle
+            { pubkey: whirlpoolOracle, isWritable: true, isSigner: false },     // 15: oracle
             { pubkey: supplementalTickArray0, isWritable: true, isSigner: false }, // 16
             { pubkey: supplementalTickArray1, isWritable: true, isSigner: false }, // 17
             { pubkey: supplementalTickArray2, isWritable: true, isSigner: false }, // 18
