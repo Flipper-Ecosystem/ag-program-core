@@ -278,10 +278,7 @@ describe("Flipper Swap Protocol - Whirlpools Swap and Limit Orders", () => {
     });
 
     it("1. Single-hop swap with Whirlpool adapter (with supplemental tick arrays)", async () => {
-        // ФИКСИРУЕМ направление: всегда свапаем A->B (aToB = true)
-        // Для этого sourceMint должен быть меньше intermediateMint
 
-        // Пересоздаем минты если нужно, чтобы sourceMint < intermediateMint
         let actualSourceMint = sourceMint;
         let actualIntermediateMint = intermediateMint;
         let actualInputVault = inputVault;
@@ -289,7 +286,7 @@ describe("Flipper Swap Protocol - Whirlpools Swap and Limit Orders", () => {
         let actualUserSourceTokenAccount = userSourceTokenAccount;
         let actualUserIntermediateTokenAccount = userIntermediateTokenAccount;
 
-        // Если порядок неправильный, меняем местами
+
         if (sourceMint.toString() > intermediateMint.toString()) {
             //console.log("Swapping source and intermediate to ensure A->B direction");
             actualSourceMint = intermediateMint;
