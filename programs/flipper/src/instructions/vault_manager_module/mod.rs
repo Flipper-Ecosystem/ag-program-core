@@ -380,6 +380,7 @@ pub fn create_vault_with_extensions(ctx: Context<CreateVaultWithExtensions>, acc
 
     // Initialize the token account with extensions
     // For Token 2022, extensions are automatically handled based on the mint's configuration
+    // If the mint has confidential transfer extension, the account will be initialized with it
     let authority_seeds = [
         b"vault_authority".as_ref(),
         &[vault_authority_bump],
@@ -398,7 +399,15 @@ pub fn create_vault_with_extensions(ctx: Context<CreateVaultWithExtensions>, acc
 
     // Initialize account with extensions
     // The token program will automatically handle extensions based on mint configuration
+    // For confidential transfer extension, the account must have the correct size (179 bytes = 165 + 14)
+    // and the mint must have confidential transfer extension enabled
     initialize_account3(initialize_ctx)?;
+
+    // Note: initialize_account3 automatically initializes extensions based on mint configuration.
+    // If the mint has confidential transfer extension, the account extension will be initialized.
+    // This is sufficient for standard token transfers (transfer_checked) used in swap operations.
+    // InitializeConfidentialTransferAccount is only needed if you want to use confidential transfer
+    // functionality (encrypted amounts), but it's NOT required for regular swaps to work.
 
     msg!(
         "Successfully created vault with extensions: {} for mint: {} (space: {} bytes)",

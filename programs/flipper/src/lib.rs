@@ -144,6 +144,16 @@ pub mod flipper {
         )
     }
 
+
+    /// Cancels an expired open limit order by operator
+    /// Rent from limit_order account goes to operator, rent from input_vault + tokens go to creator
+
+    pub fn cancel_expired_limit_order_by_operator(
+        ctx: Context<CancelExpiredLimitOrderByOperator>,
+    ) -> Result<()> {
+        instructions::cancel_expired_limit_order_by_operator(ctx)
+    }
+
     /// Cancels an open limit order
     pub fn cancel_limit_order(
         ctx: Context<CancelLimitOrder>,
