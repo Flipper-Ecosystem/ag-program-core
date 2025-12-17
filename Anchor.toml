@@ -25,7 +25,7 @@ mock_whirlpools = "CZUz9mp2h2gStQ7tKzvAjyCvW3tUgBXcSA6E6atHXxCD"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "mainnet"
+cluster = "localnet"
 wallet = "~/.config/solana/fpp-staging.json"
 
 [scripts]

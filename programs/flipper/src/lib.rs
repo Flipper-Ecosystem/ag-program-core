@@ -73,6 +73,10 @@ pub mod flipper {
         instructions::create_vault(ctx)
     }
 
+    pub fn create_vault_with_extensions(ctx: Context<CreateVaultWithExtensions>, account_space: u16) -> Result<()> {
+        instructions::create_vault_with_extensions(ctx, account_space)
+    }
+
     pub fn close_vault(ctx: Context<CloseVault>) -> Result<()> {
         instructions::close_vault(ctx)
     }
@@ -145,14 +149,6 @@ pub mod flipper {
         ctx: Context<CancelLimitOrder>,
     ) -> Result<()> {
         instructions::cancel_limit_order(ctx)
-    }
-
-    /// Cancels an expired open limit order by operator
-    /// Rent from limit_order account goes to operator, rent from input_vault + tokens go to creator
-    pub fn cancel_expired_limit_order_by_operator(
-        ctx: Context<CancelExpiredLimitOrderByOperator>,
-    ) -> Result<()> {
-        instructions::cancel_expired_limit_order_by_operator(ctx)
     }
 
     /// Closes a filled or cancelled limit order by operator and collects rent
