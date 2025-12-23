@@ -81,6 +81,8 @@ impl DexAdapter for WhirlpoolAdapter {
         }
 
         // Record initial output token balance
+        // Note: Works with Token2022 accounts with extensions (e.g., 179 bytes) because
+        // token_interface::TokenAccount only reads base structure (165 bytes)
         let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
         let initial_output_amount = output_vault_data.amount;
 
@@ -228,6 +230,7 @@ impl DexAdapter for WhirlpoolAdapter {
 
         invoke_signed(&instruction, &account_infos, signer_seeds)?;
 
+        // Note: Works with Token2022 accounts with extensions (e.g., 179 bytes)
         let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
         let output_amount = output_vault_data.amount
             .checked_sub(initial_output_amount)
@@ -314,6 +317,10 @@ impl DexAdapter for WhirlpoolAdapter {
         }
 
         // Validate vault accounts are valid token accounts
+        // Note: token_interface::TokenAccount::try_deserialize works with Token2022 accounts
+        // that have extensions (e.g., confidential transfer, 179 bytes = 165 base + 14 extension)
+        // because it only reads the base TokenAccount structure (first 165 bytes),
+        // and extensions remain untouched. This is safe as we only access base fields (mint, owner, amount).
         let vault_a_data = TokenAccount::try_deserialize(&mut token_vault_a.data.borrow().as_ref())
             .map_err(|_| ErrorCode::InvalidAccount)?;
         let vault_b_data = TokenAccount::try_deserialize(&mut token_vault_b.data.borrow().as_ref())
