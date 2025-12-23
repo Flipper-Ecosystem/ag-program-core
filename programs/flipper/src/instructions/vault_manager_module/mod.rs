@@ -321,6 +321,9 @@ pub struct CreateVaultWithExtensions<'info> {
     #[account(mut)]
     pub vault: AccountInfo<'info>,
 
+    #[account(
+        constraint = vault_mint.to_account_info().owner == &vault_token_program.key() @ ErrorCode::InvalidCpiInterface
+    )]
     pub vault_mint: InterfaceAccount<'info, Mint>,
     pub vault_token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
