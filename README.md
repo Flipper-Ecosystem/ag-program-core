@@ -162,4 +162,71 @@ To build the Solana prediction market program, follow these steps:
    ```bash
    anchor deploy
    ```
+   
+   **For upgrading an existing program on mainnet/devnet:**
+   
+   If you encounter "Error processing Instruction 2: custom program error: 0x1", it usually means:
+   1. **Program size increased**: The new program is larger than the current allocation. Extend the program account first:
+      ```bash
+      # Check current program size
+      solana program show fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit --url mainnet-beta
+      
+      # Extend program account (add ~100KB buffer for safety)
+      solana program extend fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit 100000 --url mainnet-beta --keypair ~/.config/solana/fpp-staging.json
+      ```
+   
+   2. **Then upgrade**:
+      ```bash
+      anchor upgrade target/deploy/flipper.so --program-id fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit
+      ```
+   
+   **Alternative**: Use the helper script:
+   ```bash
+   ./scripts/extend_and_upgrade.sh
+   ```
+
+## Updating IDL on Solscan
+
+After deploying or upgrading your program, you may want to update the IDL (Interface Definition Language) on Solscan so that transactions and program interactions are displayed correctly.
+
+**Method 1: Upload IDL On-Chain (Recommended)**
+
+Solscan automatically detects IDLs that are stored on-chain. To upload/update your IDL:
+
+1. **First time initialization** (if IDL was never uploaded):
+   ```bash
+   anchor idl init \
+     --filepath target/idl/flipper.json \
+     fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit \
+     --provider.cluster mainnet \
+     --provider.wallet ~/.config/solana/fpp-staging.json
+   ```
+
+2. **Updating existing IDL**:
+   ```bash
+   anchor idl upgrade \
+     --filepath target/idl/flipper.json \
+     fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit \
+     --provider.cluster mainnet \
+     --provider.wallet ~/.config/solana/fpp-staging.json
+   ```
+
+**Using the helper script**:
+```bash
+# For first time initialization
+./scripts/update_idl.sh init
+
+# For updating existing IDL
+./scripts/update_idl.sh upgrade
+```
+
+**Method 2: Manual Upload on Solscan**
+
+If the on-chain method doesn't work, you can manually upload the IDL:
+1. Go to [Solscan](https://solscan.io) and create/login to your account
+2. Navigate to your program page: `https://solscan.io/account/fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit`
+3. Look for an "Upload IDL" or "Verify Program" option in your profile
+4. Upload the `target/idl/flipper.json` file
+
+**Note**: Make sure to run `anchor build` first to generate the latest IDL file before uploading.
 
