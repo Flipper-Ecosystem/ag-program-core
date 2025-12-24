@@ -48,3 +48,4 @@ echo "📝 Note: Solscan will automatically detect the updated IDL from the on-c
 echo "   Visit: https://solscan.io/account/$PROGRAM_ID to verify"
 
 
+
