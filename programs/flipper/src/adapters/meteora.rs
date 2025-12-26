@@ -16,19 +16,42 @@ pub struct MeteoraAdapter {
 const TOKEN_PROGRAM_ID: Pubkey = anchor_spl::token::ID;
 const TOKEN_2022_PROGRAM_ID: Pubkey = anchor_spl::token_2022::ID;
 
-/// Meteora swap instruction discriminator
-/// This is the first 8 bytes of the sha256 hash of "global:swap"
-const SWAP_DISCRIMINATOR: [u8; 8] = [248, 198, 158, 145, 225, 117, 135, 200];
+/// Meteora swap2 instruction discriminator
+/// This is the first 8 bytes of the sha256 hash of "global:swap2"
+const SWAP2_DISCRIMINATOR: [u8; 8] = [65, 75, 63, 76, 235, 91, 91, 136];
 
-/// Arguments for Meteora swap instruction
+/// Arguments for Meteora swap2 instruction
 #[derive(Clone, AnchorSerialize, AnchorDeserialize)]
-pub struct SwapArgs {
+pub struct Swap2Args {
     pub amount_in: u64,                           // Amount of input tokens to swap
     pub min_amount_out: u64,                      // Minimum amount of output tokens expected
+    pub remaining_accounts_info: RemainingAccountsInfo, // Info about remaining accounts (bin arrays, transfer hooks, etc.)
+}
+
+/// Remaining accounts info structure for Meteora swap2
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub struct RemainingAccountsInfo {
+    pub slices: Vec<RemainingAccountsSlice>,
+}
+
+/// Slice information for remaining accounts
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub struct RemainingAccountsSlice {
+    pub accounts_type: AccountsType,
+    pub length: u8,
+}
+
+/// Account types for remaining accounts
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub enum AccountsType {
+    TransferHookX,
+    TransferHookY,
+    TransferHookReward,
+    TransferHookMultiReward(u8),
 }
 
 impl DexAdapter for MeteoraAdapter {
-    /// Execute a swap through Meteora DLMM protocol
+    /// Execute a swap through Meteora DLMM protocol using swap2 instruction
     fn execute_swap(
         &self,
         ctx: AdapterContext,
@@ -36,11 +59,11 @@ impl DexAdapter for MeteoraAdapter {
         remaining_accounts_start_index: usize,
         remaining_accounts_count: usize,
     ) -> Result<SwapResult> {
-        msg!("Executing Meteora swap, amount: {}", amount);
+        msg!("Executing Meteora swap2, amount: {}", amount);
         msg!("Meteora adapter: start_index={}, count={}, total_remaining={}", 
              remaining_accounts_start_index, remaining_accounts_count, ctx.remaining_accounts.len());
 
-        const MIN_ACCOUNTS: usize = 15; // swap имеет 15 основных аккаунтов (без memo_program)
+        const MIN_ACCOUNTS: usize = 16; // swap2 имеет 16 основных аккаунтов (с memo_program)
         // Ensure minimum required accounts are present
         if remaining_accounts_count < MIN_ACCOUNTS {
             msg!("Error: Not enough accounts. Required: {}, Got: {}", MIN_ACCOUNTS, remaining_accounts_count);
@@ -65,15 +88,15 @@ impl DexAdapter for MeteoraAdapter {
 
         // Calculate number of bin arrays available (maximum 5 for Meteora, optional)
         // adapter_accounts[0] = Pool Info (not used in instruction)
-        // adapter_accounts[1-14] = Basic Meteora accounts (14 accounts, but we use ctx.input_account and ctx.output_account)
-        // In instruction: 15 basic accounts (lb_pair through program)
-        // adapter_accounts[14] = Program (first program_id)
-        // adapter_accounts[15-N] = Bin arrays (between two program_id)
+        // adapter_accounts[1-15] = Basic Meteora accounts (15 accounts, but we use ctx.input_account and ctx.output_account)
+        // In instruction: 16 basic accounts (lb_pair through program)
+        // adapter_accounts[15] = Program (first program_id)
+        // adapter_accounts[16-N] = Bin arrays (between two program_id)
         // adapter_accounts[N+1] = Program ID (second program_id) - marks end of bin arrays
         // adapter_accounts[N+2] = Output Vault (not included in adapter_accounts)
         const MAX_BIN_ARRAYS: usize = 5;
-        const BIN_ARRAYS_START: usize = 15; // Bin arrays start at index 15 in adapter_accounts (after first program at index 14)
-        const PROGRAM_INDEX: usize = 14; // First program_id is at index 14
+        const BIN_ARRAYS_START: usize = 16; // Bin arrays start at index 16 in adapter_accounts (after first program at index 15)
+        const PROGRAM_INDEX: usize = 15; // First program_id is at index 15
         
         // Find the second program_id to determine where bin arrays end
         // Bin arrays are between two program_id accounts
@@ -101,19 +124,26 @@ impl DexAdapter for MeteoraAdapter {
         let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
         let initial_output_amount = output_vault_data.amount;
 
-        // Create swap instruction arguments (без remaining_accounts_info для swap)
-        let swap_args = SwapArgs {
+        // Build remaining_accounts_info for bin arrays
+        // For swap2, bin arrays are passed through remaining_accounts_info
+        let remaining_accounts_info = RemainingAccountsInfo {
+            slices: vec![], // Bin arrays are passed directly as remaining accounts, not through slices
+        };
+
+        // Create swap2 instruction arguments with remaining_accounts_info
+        let swap2_args = Swap2Args {
             amount_in: amount,
             min_amount_out: 0,
+            remaining_accounts_info: remaining_accounts_info.clone(),
         };
 
         // Prepare instruction data with discriminator and serialized arguments
         let mut instruction_data = Vec::new();
-        instruction_data.extend_from_slice(&SWAP_DISCRIMINATOR);
-        instruction_data.extend_from_slice(&swap_args.try_to_vec()?);
+        instruction_data.extend_from_slice(&SWAP2_DISCRIMINATOR);
+        instruction_data.extend_from_slice(&swap2_args.try_to_vec()?);
 
         // Build account metas for the instruction
-        // Order must match Meteora swap interface exactly according to IDL:
+        // Order must match Meteora swap2 interface exactly according to IDL:
         // 1. lb_pair (writable)
         // 2. bin_array_bitmap_extension (optional, writable)
         // 3. reserve_x (writable)
@@ -127,9 +157,10 @@ impl DexAdapter for MeteoraAdapter {
         // 11. user (signer, readonly)
         // 12. token_x_program (readonly)
         // 13. token_y_program (readonly)
-        // 14. event_authority (readonly, PDA)
-        // 15. program (readonly)
-        // 16+ bin arrays (if present, as remaining accounts without RemainingAccountsInfo)
+        // 14. memo_program (readonly) - NEW in swap2
+        // 15. event_authority (readonly, PDA)
+        // 16. program (readonly)
+        // 17+ bin arrays (if present, as remaining accounts)
         let mut accounts = vec![
             AccountMeta::new(adapter_accounts[1].key(), false),       // lb_pair
             AccountMeta::new(adapter_accounts[2].key(), false),       // bin_array_bitmap_extension
@@ -144,12 +175,13 @@ impl DexAdapter for MeteoraAdapter {
             AccountMeta::new_readonly(ctx.authority.key(), true),      // user (signer)
             AccountMeta::new_readonly(adapter_accounts[11].key(), false), // token_x_program
             AccountMeta::new_readonly(adapter_accounts[12].key(), false), // token_y_program
-            AccountMeta::new_readonly(adapter_accounts[13].key(), false), // event_authority (PDA)
-            AccountMeta::new_readonly(adapter_accounts[14].key(), false), // program
+            AccountMeta::new_readonly(adapter_accounts[13].key(), false), // memo_program (NEW in swap2)
+            AccountMeta::new_readonly(adapter_accounts[14].key(), false), // event_authority (PDA)
+            AccountMeta::new_readonly(adapter_accounts[15].key(), false), // program
         ];
         
         // Add bin arrays to account metas (dynamic part, если есть)
-        // Bin arrays are between first program_id (index 15) and second program_id
+        // Bin arrays are between first program_id (index 16) and second program_id
         if bin_arrays_count > 0 {
             let bin_arrays_end = BIN_ARRAYS_START + bin_arrays_count as usize;
             if bin_arrays_end > adapter_accounts.len() {
@@ -167,7 +199,7 @@ impl DexAdapter for MeteoraAdapter {
         msg!("Meteora adapter: Total accounts: {}", accounts.len());
 
         // Build AccountInfo vector (not references)
-        // Order must match accounts vector exactly (15 accounts + bin arrays)
+        // Order must match accounts vector exactly (16 accounts + bin arrays)
         let mut account_infos = vec![
             adapter_accounts[1].clone(),    // lb_pair
             adapter_accounts[2].clone(),    // bin_array_bitmap_extension
@@ -182,12 +214,13 @@ impl DexAdapter for MeteoraAdapter {
             ctx.authority.clone(),          // user
             adapter_accounts[11].clone(),   // token_x_program
             adapter_accounts[12].clone(),  // token_y_program
-            adapter_accounts[13].clone(),  // event_authority
-            adapter_accounts[14].clone(),  // program
+            adapter_accounts[13].clone(),  // memo_program (NEW in swap2)
+            adapter_accounts[14].clone(),  // event_authority
+            adapter_accounts[15].clone(),  // program
         ];
         
         // Add bin arrays to account_infos (dynamic part, если есть)
-        // Bin arrays are between first program_id (index 15) and second program_id
+        // Bin arrays are between first program_id (index 16) and second program_id
         if bin_arrays_count > 0 {
             msg!("Meteora adapter: Adding {} bin arrays to account_infos, starting from index {}", bin_arrays_count, account_infos.len());
             for i in 0..bin_arrays_count {
@@ -236,7 +269,7 @@ impl DexAdapter for MeteoraAdapter {
             .checked_sub(initial_output_amount)
             .ok_or(ErrorCode::InvalidCalculation)?;
 
-        msg!("Meteora swap completed, output amount: {}", output_amount);
+        msg!("Meteora swap2 completed, output amount: {}", output_amount);
 
         Ok(SwapResult { output_amount })
     }
@@ -249,7 +282,7 @@ impl DexAdapter for MeteoraAdapter {
         remaining_accounts_count: usize,
     ) -> Result<()> {
 
-        const MIN_ACCOUNTS: usize = 15; // swap имеет 15 основных аккаунтов (без memo_program)
+        const MIN_ACCOUNTS: usize = 16; // swap2 имеет 16 основных аккаунтов (с memo_program)
 
         // Ensure minimum required accounts are present
         if remaining_accounts_count < MIN_ACCOUNTS {
@@ -278,7 +311,7 @@ impl DexAdapter for MeteoraAdapter {
         // Validate token programs are correct (SPL Token or Token2022)
         let token_x_program = &adapter_accounts[11];
         let token_y_program = &adapter_accounts[12];
-        let program = &adapter_accounts[14]; // program is at index 14
+        let program = &adapter_accounts[15]; // program is at index 15
 
         if program.key() != self.program_id {
             return Err(ErrorCode::InvalidCpiInterface.into());

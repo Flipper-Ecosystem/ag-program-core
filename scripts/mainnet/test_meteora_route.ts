@@ -37,6 +37,7 @@ const flipperProgram = new Program(FLIPPER_IDL, provider);
 
 // Mainnet constants
 const METEORA_DLMM_PROGRAM_ID = new PublicKey("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
+const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
 const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 
@@ -68,6 +69,7 @@ async function main() {
     console.log("   Wallet:", wallet.publicKey.toBase58());
     console.log("   Program ID:", flipperProgram.programId.toBase58());
     console.log("   Meteora Program ID:", METEORA_DLMM_PROGRAM_ID.toBase58());
+    console.log("   Memo Program ID:", MEMO_PROGRAM_ID.toBase58());
     console.log("   WSOL Mint:", WSOL_MINT.toBase58());
     console.log("   USDC Mint:", USDC_MINT.toBase58());
     console.log("   LB Pair:", METEORA_LB_PAIR.toBase58());
@@ -179,17 +181,54 @@ async function main() {
     }
     console.log();
 
+    // Check if PoolInfo exists, if not initialize it
+    console.log("🔍 Checking PoolInfo...");
+    try {
+        const poolInfoAccount = await (flipperProgram.account as any).poolInfo.fetch(meteoraPoolInfo);
+        console.log("   ✓ PoolInfo already exists");
+        console.log("   Enabled:", poolInfoAccount.enabled);
+        console.log("   Pool Address:", poolInfoAccount.poolAddress.toBase58());
+        console.log("   Swap Type:", JSON.stringify(poolInfoAccount.adapterSwapType));
+    } catch (e: any) {
+        if (e.message && e.message.includes("Account does not exist")) {
+            console.log("   ⚠️  PoolInfo does not exist, initializing...");
+            try {
+                const initTxSignature = await flipperProgram.methods
+                    .initializePoolInfo({ meteora: {} }, METEORA_LB_PAIR)
+                    .accounts({
+                        poolInfo: meteoraPoolInfo,
+                        adapterRegistry,
+                        payer: wallet.publicKey,
+                        operator: wallet.publicKey,
+                        systemProgram: SystemProgram.programId,
+                    })
+                    .signers([wallet.payer])
+                    .rpc();
+
+                console.log("   ✓ PoolInfo initialized");
+                console.log("   Transaction:", initTxSignature);
+                console.log("   Explorer:", `https://solscan.io/tx/${initTxSignature}`);
+            } catch (initError: any) {
+                console.error("   ❌ Failed to initialize PoolInfo:", initError.message);
+                throw initError;
+            }
+        } else {
+            throw e;
+        }
+    }
+    console.log();
+
     // Prepare route plan
     const routePlan = [
         {
             swap: { meteora: {} },
             inputIndex: 0,
-            outputIndex: 21, // Output vault index (after bin arrays and second program_id)
+            outputIndex: 22, // Output vault index (after bin arrays and second program_id)
             percent: 100,
         },
     ];
 
-    // Prepare remaining accounts for Meteora swap (swap instruction, без memo_program)
+    // Prepare remaining accounts for Meteora swap2 instruction (with memo_program)
     // Order according to adapter expectations:
     // [0] Input Vault
     // [1] Pool Info
@@ -205,41 +244,43 @@ async function main() {
     // [11] Host Fee In
     // [12] Token X Program
     // [13] Token Y Program
-        // [14] Event Authority (без memo_program для swap)
-        // [15] Program (first program_id)
-        // [16-19] Bin Arrays (4 штуки, между двумя program_id)
-        // [20] Program ID (second program_id - marks end of bin arrays)
-        // [21] Output Vault
-        const remainingAccounts = [
-            { pubkey: inputVault, isWritable: true, isSigner: false }, // 0: inputVault
-            { pubkey: meteoraPoolInfo, isWritable: false, isSigner: false }, // 1: pool_info
-            { pubkey: METEORA_LB_PAIR, isWritable: true, isSigner: false }, // 2: lb_pair
-            { pubkey: METEORA_BIN_ARRAY_BITMAP_EXT, isWritable: true, isSigner: false }, // 3: bin_array_bitmap_extension
-            { pubkey: METEORA_RESERVE_X, isWritable: true, isSigner: false }, // 4: reserve_x
-            { pubkey: METEORA_RESERVE_Y, isWritable: true, isSigner: false }, // 5: reserve_y
-            { pubkey: inputVault, isWritable: true, isSigner: false }, // 6: user_token_in (vault X)
-            { pubkey: outputVault, isWritable: true, isSigner: false }, // 7: user_token_out (vault Y)
-            { pubkey: WSOL_MINT, isWritable: false, isSigner: false }, // 8: token_x_mint
-            { pubkey: USDC_MINT, isWritable: false, isSigner: false }, // 9: token_y_mint
-            { pubkey: METEORA_ORACLE, isWritable: true, isSigner: false }, // 10: oracle
-            { pubkey: METEORA_HOST_FEE_IN, isWritable: true, isSigner: false }, // 11: host_fee_in
-            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false }, // 12: token_x_program
-            { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false }, // 13: token_y_program
-            { pubkey: METEORA_EVENT_AUTHORITY, isWritable: false, isSigner: false }, // 14: event_authority (без memo_program для swap)
-            { pubkey: METEORA_DLMM_PROGRAM_ID, isWritable: false, isSigner: false }, // 15: program (first program_id)
-            // Bin arrays (4 штуки, между двумя program_id)
-            { pubkey: METEORA_BIN_ARRAYS[0], isWritable: true, isSigner: false }, // 16: bin_array #17
-            { pubkey: METEORA_BIN_ARRAYS[1], isWritable: true, isSigner: false }, // 17: bin_array #18
-            { pubkey: METEORA_BIN_ARRAYS[2], isWritable: true, isSigner: false }, // 18: bin_array #19
-            { pubkey: METEORA_BIN_ARRAYS[3], isWritable: true, isSigner: false }, // 19: bin_array #20
-            { pubkey: METEORA_DLMM_PROGRAM_ID, isWritable: false, isSigner: false }, // 20: program ID (second program_id - marks end of bin arrays)
-            { pubkey: outputVault, isWritable: true, isSigner: false }, // 21: output vault
-        ];
+    // [14] Memo Program (NEW in swap2)
+    // [15] Event Authority
+    // [16] Program (first program_id)
+    // [17-20] Bin Arrays (4 штуки, между двумя program_id)
+    // [21] Program ID (second program_id - marks end of bin arrays)
+    // [22] Output Vault
+    const remainingAccounts = [
+        { pubkey: inputVault, isWritable: true, isSigner: false }, // 0: inputVault
+        { pubkey: meteoraPoolInfo, isWritable: false, isSigner: false }, // 1: pool_info
+        { pubkey: METEORA_LB_PAIR, isWritable: true, isSigner: false }, // 2: lb_pair
+        { pubkey: METEORA_BIN_ARRAY_BITMAP_EXT, isWritable: true, isSigner: false }, // 3: bin_array_bitmap_extension
+        { pubkey: METEORA_RESERVE_X, isWritable: true, isSigner: false }, // 4: reserve_x
+        { pubkey: METEORA_RESERVE_Y, isWritable: true, isSigner: false }, // 5: reserve_y
+        { pubkey: inputVault, isWritable: true, isSigner: false }, // 6: user_token_in (vault X)
+        { pubkey: outputVault, isWritable: true, isSigner: false }, // 7: user_token_out (vault Y)
+        { pubkey: WSOL_MINT, isWritable: false, isSigner: false }, // 8: token_x_mint
+        { pubkey: USDC_MINT, isWritable: false, isSigner: false }, // 9: token_y_mint
+        { pubkey: METEORA_ORACLE, isWritable: true, isSigner: false }, // 10: oracle
+        { pubkey: METEORA_HOST_FEE_IN, isWritable: true, isSigner: false }, // 11: host_fee_in
+        { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false }, // 12: token_x_program
+        { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false }, // 13: token_y_program
+        { pubkey: MEMO_PROGRAM_ID, isWritable: false, isSigner: false }, // 14: memo_program (NEW in swap2)
+        { pubkey: METEORA_EVENT_AUTHORITY, isWritable: false, isSigner: false }, // 15: event_authority
+        { pubkey: METEORA_DLMM_PROGRAM_ID, isWritable: false, isSigner: false }, // 16: program (first program_id)
+        // Bin arrays (4 штуки, между двумя program_id)
+        { pubkey: METEORA_BIN_ARRAYS[0], isWritable: true, isSigner: false }, // 17: bin_array #17
+        { pubkey: METEORA_BIN_ARRAYS[1], isWritable: true, isSigner: false }, // 18: bin_array #18
+        { pubkey: METEORA_BIN_ARRAYS[2], isWritable: true, isSigner: false }, // 19: bin_array #19
+        { pubkey: METEORA_BIN_ARRAYS[3], isWritable: true, isSigner: false }, // 20: bin_array #20
+        { pubkey: METEORA_DLMM_PROGRAM_ID, isWritable: false, isSigner: false }, // 21: program ID (second program_id - marks end of bin arrays)
+        { pubkey: outputVault, isWritable: true, isSigner: false }, // 22: output vault
+    ];
 
     console.log("📋 Route Plan:");
-    console.log("   Swap: Meteora DLMM");
+    console.log("   Swap: Meteora DLMM (swap2)");
     console.log("   Input Index: 0");
-    console.log("   Output Index: 21");
+    console.log("   Output Index: 22");
     console.log("   Percent: 100%");
     console.log();
 
