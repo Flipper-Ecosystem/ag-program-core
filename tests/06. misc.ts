@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program, BN } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram, Transaction } from "@solana/web3.js";
+import { PublicKey, Keypair, SystemProgram, Transaction, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
     TOKEN_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -469,9 +469,24 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
         );
 
         const [orderVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("order_vault"), limitOrder.toBuffer()],
+            [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
             program.programId
         );
+
+        // Create vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .createOrderVaultWithExtensions(nonce, 0)
+            .accounts({
+                vaultAuthority,
+                payer: user.publicKey,
+                orderVault,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         const initialBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
 
@@ -535,9 +550,24 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
         );
 
         const [orderVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("order_vault"), limitOrder.toBuffer()],
+            [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
             program.programId
         );
+
+        // Create vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .createOrderVaultWithExtensions(nonce, 0)
+            .accounts({
+                vaultAuthority,
+                payer: user.publicKey,
+                orderVault,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         await program.methods
             .createLimitOrder(
@@ -646,9 +676,24 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
         );
 
         const [orderVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("order_vault"), limitOrder.toBuffer()],
+            [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
             program.programId
         );
+
+        // Create vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .createOrderVaultWithExtensions(nonce, 0)
+            .accounts({
+                vaultAuthority,
+                payer: user.publicKey,
+                orderVault,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         await program.methods
             .createLimitOrder(
@@ -718,9 +763,24 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
         );
 
         const [orderVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("order_vault"), limitOrder.toBuffer()],
+            [Buffer.from("order_vault"), user.publicKey.toBuffer(), orderNonce.toArrayLike(Buffer, 'le', 8)],
             program.programId
         );
+
+        // Create vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .createOrderVaultWithExtensions(orderNonce, 0)
+            .accounts({
+                vaultAuthority,
+                payer: user.publicKey,
+                orderVault,
+                inputMint: destinationMint, // For route_and_create_order, vault holds output_mint tokens
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         const routePlan = [
             { swap: { raydium: {} }, percent: 100, inputIndex: 0, outputIndex: 13 }
@@ -892,9 +952,24 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
         );
 
         const [orderVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("order_vault"), limitOrder.toBuffer()],
+            [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
             program.programId
         );
+
+        // Create vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .createOrderVaultWithExtensions(nonce, 0)
+            .accounts({
+                vaultAuthority,
+                payer: user.publicKey,
+                orderVault,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         await program.methods
             .createLimitOrder(
@@ -1054,7 +1129,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             );
 
             const [orderVault] = PublicKey.findProgramAddressSync(
-                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
                 program.programId
             );
 
@@ -1179,9 +1254,24 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             );
 
             const [orderVault] = PublicKey.findProgramAddressSync(
-                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
                 program.programId
             );
+
+            // Create vault first (for standard tokens, account_space = 0)
+            await program.methods
+                .createOrderVaultWithExtensions(nonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    payer: user.publicKey,
+                    orderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
 
             await program.methods
                 .createLimitOrder(
@@ -1259,7 +1349,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             );
 
             const [orderVault] = PublicKey.findProgramAddressSync(
-                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
                 program.programId
             );
 
@@ -1269,6 +1359,21 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             // For testing, let's create with a very short expiry and wait, or better yet, create with future expiry
             // and then use cancel_expired_limit_order_by_operator which checks expiry
             
+            // Create vault first (for standard tokens, account_space = 0)
+            await program.methods
+                .createOrderVaultWithExtensions(nonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    payer: user.publicKey,
+                    orderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
+
             // Create order with future expiry first
             const futureExpiry = new BN(Math.floor(Date.now() / 1000) + 3600);
             await program.methods
@@ -1353,9 +1458,24 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             );
 
             const [expiredOrderVault] = PublicKey.findProgramAddressSync(
-                [Buffer.from("order_vault"), expiredLimitOrder.toBuffer()],
+                [Buffer.from("order_vault"), user.publicKey.toBuffer(), expiredNonce.toArrayLike(Buffer, 'le', 8)],
                 program.programId
             );
+
+            // Create vault first (for standard tokens, account_space = 0)
+            await program.methods
+                .createOrderVaultWithExtensions(expiredNonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    payer: user.publicKey,
+                    orderVault: expiredOrderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
 
             // Create order with 1 second expiry
             const shortExpiry = new BN(Math.floor(Date.now() / 1000) + 1);
@@ -1444,9 +1564,24 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             );
 
             const [orderVault] = PublicKey.findProgramAddressSync(
-                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
                 program.programId
             );
+
+            // Create vault first (for standard tokens, account_space = 0)
+            await program.methods
+                .createOrderVaultWithExtensions(nonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    payer: user.publicKey,
+                    orderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
 
             await program.methods
                 .createLimitOrder(
@@ -1513,9 +1648,24 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             );
 
             const [orderVault] = PublicKey.findProgramAddressSync(
-                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
                 program.programId
             );
+
+            // Create vault first (for standard tokens, account_space = 0)
+            await program.methods
+                .createOrderVaultWithExtensions(nonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    payer: user.publicKey,
+                    orderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
 
             await program.methods
                 .createLimitOrder(
