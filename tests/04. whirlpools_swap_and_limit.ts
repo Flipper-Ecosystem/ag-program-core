@@ -1,18 +1,20 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program, BN } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram, Transaction } from "@solana/web3.js";
+import { PublicKey, Keypair, SystemProgram, Transaction, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
     TOKEN_PROGRAM_ID,
+    TOKEN_2022_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
     createMint,
     mintTo,
     getAssociatedTokenAddressSync,
     createAssociatedTokenAccount,
     getAccount,
-    getOrCreateAssociatedTokenAccount
+    getOrCreateAssociatedTokenAccount,
 } from "@solana/spl-token";
 import { assert } from "chai";
 import { Flipper } from "../target/types/flipper";
+
 
 describe("Flipper Swap Protocol - Whirlpools Swap and Limit Orders", () => {
     const provider = anchor.AnchorProvider.env();

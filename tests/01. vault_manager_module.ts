@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { PublicKey, Keypair, SystemProgram, LAMPORTS_PER_SOL, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
     TOKEN_PROGRAM_ID,
     TOKEN_2022_PROGRAM_ID,
@@ -209,6 +209,86 @@ describe("Flipper Swap Protocol - Vault Manager Module", () => {
             expect(vaultAccount.mint.equals(token2022Mint)).to.be.true;
             expect(vaultAccount.owner.equals(vaultAuthority)).to.be.true;
             expect(Number(vaultAccount.amount)).to.equal(0);
+        });
+
+        it("should create vault with extensions for Token-2022 (account_space=14)", async () => {
+            // Create a new Token 2022 mint for testing extensions
+            const token2022WithExtensionsMint = await createMint(
+                provider.connection,
+                payer,
+                admin.publicKey,
+                admin.publicKey,
+                9,
+                undefined,
+                undefined,
+                TOKEN_2022_PROGRAM_ID
+            );
+
+            const [vaultWithExtensions] = PublicKey.findProgramAddressSync(
+                [Buffer.from("vault"), token2022WithExtensionsMint.toBuffer()],
+                program.programId
+            );
+
+            // Create vault with extensions (14 bytes for confidentialTransfer extension)
+            await program.methods
+                .createVaultWithExtensions(14)
+                .accounts({
+                    vaultAuthority,
+                    payer: payer.publicKey,
+                    admin: admin.publicKey,
+                    vault: vaultWithExtensions,
+                    vaultMint: token2022WithExtensionsMint,
+                    vaultTokenProgram: TOKEN_2022_PROGRAM_ID,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([payer, admin])
+                .rpc();
+
+            // Verify vault was created successfully
+            const vaultAccount = await getAccount(
+                provider.connection,
+                vaultWithExtensions,
+                undefined,
+                TOKEN_2022_PROGRAM_ID
+            );
+            expect(vaultAccount.mint.equals(token2022WithExtensionsMint)).to.be.true;
+            expect(vaultAccount.owner.equals(vaultAuthority)).to.be.true;
+            expect(Number(vaultAccount.amount)).to.equal(0);
+
+            // Verify account size is correct (165 base + 14 extensions = 179 bytes)
+            const accountInfo = await provider.connection.getAccountInfo(vaultWithExtensions);
+            expect(accountInfo).to.not.be.null;
+            if (accountInfo) {
+                expect(accountInfo.data.length).to.be.at.least(179);
+            }
+        });
+
+        it("should fail to create vault with extensions using Legacy Token Program", async () => {
+            const [wrongVault] = PublicKey.findProgramAddressSync(
+                [Buffer.from("vault"), tokenMint.toBuffer()],
+                program.programId
+            );
+
+            try {
+                await program.methods
+                    .createVaultWithExtensions(14)
+                    .accounts({
+                        vaultAuthority,
+                        payer: payer.publicKey,
+                        admin: admin.publicKey,
+                        vault: wrongVault,
+                        vaultMint: tokenMint,
+                        vaultTokenProgram: TOKEN_PROGRAM_ID, // Wrong program
+                        systemProgram: SystemProgram.programId,
+                        rent: SYSVAR_RENT_PUBKEY,
+                    })
+                    .signers([payer, admin])
+                    .rpc();
+                expect.fail("Should have failed");
+            } catch (error) {
+                expect(error.message).to.include("InvalidCpiInterface");
+            }
         });
 
         it("should fail to create vault with wrong admin", async () => {

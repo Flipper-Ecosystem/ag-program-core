@@ -66,6 +66,10 @@ pub fn validate_route<'info>(
     validate_mint_program_compatibility(destination_mint, output_token_program)?;
 
     // Validate input vault using token_interface
+    // Note: token_interface::TokenAccount::try_deserialize works with Token2022 accounts
+    // that have extensions (e.g., confidential transfer, 179 bytes = 165 base + 14 extension)
+    // because it only reads the base TokenAccount structure (first 165 bytes),
+    // and extensions remain untouched.
     let input_vault = remaining_accounts
         .iter()
         .find(|acc| {

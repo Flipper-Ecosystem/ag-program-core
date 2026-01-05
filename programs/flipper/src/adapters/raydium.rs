@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::program::invoke;
-use anchor_spl::token::{Token, TokenAccount};
+use anchor_spl::token_interface::TokenAccount;
 use crate::adapters::adapter_connector_module::{AdapterContext};
 use crate::adapters::dex_adapter::DexAdapter;
 use crate::errors::ErrorCode;
