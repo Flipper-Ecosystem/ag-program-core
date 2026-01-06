@@ -122,136 +122,14 @@ impl LimitOrder {
     }
 }
 
-/// Creates an order vault for limit orders with support for Token 2022 extensions
+/// Initializes a limit order account and its associated vault with support for Token 2022 extensions
 /// This instruction supports tokens with extensions like confidential transactions (xstocks)
 /// The account_space parameter should include the size of all extensions.
 /// For standard tokens: account_space = 0 (uses default 165 bytes)
 /// For xstocks tokens with confidential transfer: account_space = 14 (179 bytes total)
-/// 
-/// Note: The vault can be created before the limit_order account, as it uses creator + nonce
-/// as seeds instead of limit_order.key(). This allows creating them in any order in a transaction.
 #[derive(Accounts)]
-#[instruction(order_nonce: u64, account_space: u16)]
-pub struct CreateOrderVaultWithExtensions<'info> {
-    /// Vault authority PDA controlling all vaults
-    #[account(
-        seeds = [b"vault_authority"],
-        bump
-    )]
-    pub vault_authority: Account<'info, VaultAuthority>,
-
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    /// CHECK: The vault account will be initialized by this instruction
-    #[account(mut)]
-    pub order_vault: AccountInfo<'info>,
-
-    #[account(
-        constraint = input_mint.to_account_info().owner == &input_token_program.key() @ ErrorCode::InvalidCpiInterface
-    )]
-    pub input_mint: InterfaceAccount<'info, Mint>,
-    pub input_token_program: Interface<'info, TokenInterface>,
-    pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
-}
-
-pub fn create_order_vault_with_extensions(
-    ctx: Context<CreateOrderVaultWithExtensions>,
-    order_nonce: u64,
-    account_space: u16,
-) -> Result<()> {
-    // Derive order vault PDA using creator + nonce (same as limit_order seeds)
-    // This allows creating vault before limit_order, avoiding circular dependency
-    let creator = ctx.accounts.payer.key();
-    let (vault_pda, vault_bump) = Pubkey::find_program_address(
-        &[b"order_vault", creator.as_ref(), order_nonce.to_le_bytes().as_ref()],
-        ctx.program_id,
-    );
-
-    require!(
-        ctx.accounts.order_vault.key() == vault_pda,
-        ErrorCode::InvalidVaultAddress
-    );
-
-    // Calculate the required account size
-    // Base token account size is 165 bytes
-    // Extensions add additional space
-    let base_size: usize = 165;
-    let extension_size: usize = account_space as usize;
-    let total_size = base_size + extension_size;
-
-    // If account_space is 0, we can use standard token program (SPL Token or Token 2022)
-    // If account_space > 0, we must use Token 2022 program
-    if account_space > 0 {
-        require!(
-            ctx.accounts.input_token_program.key() == TOKEN_2022_PROGRAM_ID,
-            ErrorCode::InvalidCpiInterface
-        );
-    }
-
-    // Create the account first
-    let vault_authority_bump = ctx.accounts.vault_authority.bump;
-    let creator_bytes = creator.as_ref();
-    let nonce_bytes = order_nonce.to_le_bytes();
-    let vault_seeds = [
-        b"order_vault",
-        creator_bytes,
-        nonce_bytes.as_ref(),
-        &[vault_bump],
-    ];
-
-    anchor_lang::solana_program::program::invoke_signed(
-        &anchor_lang::solana_program::system_instruction::create_account(
-            &ctx.accounts.payer.key(),
-            &ctx.accounts.order_vault.key(),
-            ctx.accounts.rent.minimum_balance(total_size),
-            total_size as u64,
-            &ctx.accounts.input_token_program.key(),
-        ),
-        &[
-            ctx.accounts.payer.to_account_info(),
-            ctx.accounts.order_vault.to_account_info(),
-            ctx.accounts.system_program.to_account_info(),
-        ],
-        &[&vault_seeds],
-    )?;
-
-    // Initialize the token account with extensions
-    let authority_seeds = [
-        b"vault_authority".as_ref(),
-        &[vault_authority_bump],
-    ];
-    let signer_seeds = &[&authority_seeds[..]];
-
-    let initialize_ctx = CpiContext::new_with_signer(
-        ctx.accounts.input_token_program.to_account_info(),
-        InitializeAccount3 {
-            account: ctx.accounts.order_vault.to_account_info(),
-            mint: ctx.accounts.input_mint.to_account_info(),
-            authority: ctx.accounts.vault_authority.to_account_info(),
-        },
-        signer_seeds,
-    );
-
-    // Initialize account with extensions
-    // The token program will automatically handle extensions based on mint configuration
-    initialize_account3(initialize_ctx)?;
-
-    msg!(
-        "Successfully created order vault with extensions: {} for mint: {} (space: {} bytes)",
-        ctx.accounts.order_vault.key(),
-        ctx.accounts.input_mint.key(),
-        total_size
-    );
-    Ok(())
-}
-
-/// Create limit order instruction accounts
-#[event_cpi]
-#[derive(Accounts)]
-#[instruction(nonce: u64)]
-pub struct CreateLimitOrder<'info> {
+#[instruction(nonce: u64, account_space: u16)]
+pub struct InitLimitOrder<'info> {
     /// Vault authority PDA controlling all vaults
     #[account(
         seeds = [b"vault_authority"],
@@ -270,11 +148,153 @@ pub struct CreateLimitOrder<'info> {
     pub limit_order: Account<'info, LimitOrder>,
 
     /// Vault to hold input tokens until order execution
-    /// Must be created separately using create_order_vault_with_extensions for tokens with extensions
+    /// CHECK: The vault account will be initialized by this instruction
+    #[account(mut)]
+    pub input_vault: AccountInfo<'info>,
+
+    #[account(
+        constraint = input_mint.to_account_info().owner == &input_token_program.key() @ ErrorCode::InvalidCpiInterface
+    )]
+    pub input_mint: InterfaceAccount<'info, Mint>,
+    pub input_token_program: Interface<'info, TokenInterface>,
+    
+    #[account(mut)]
+    pub creator: Signer<'info>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+pub fn init_limit_order(
+    ctx: Context<InitLimitOrder>,
+    nonce: u64,
+    account_space: u16,
+) -> Result<()> {
+    // Derive vault PDA using limit_order.key() as seed
+    let limit_order_key = ctx.accounts.limit_order.key();
+    let (vault_pda, vault_bump) = Pubkey::find_program_address(
+        &[b"order_vault", limit_order_key.as_ref()],
+        ctx.program_id,
+    );
+
+    require!(
+        ctx.accounts.input_vault.key() == vault_pda,
+        ErrorCode::InvalidVaultAddress
+    );
+
+    // Calculate the required account size for vault
+    // Base token account size is 165 bytes
+    // Extensions add additional space
+    let base_size: usize = 165;
+    let extension_size: usize = account_space as usize;
+    let total_size = base_size + extension_size;
+
+    // If account_space is 0, we can use standard token program (SPL Token or Token 2022)
+    // If account_space > 0, we must use Token 2022 program
+    if account_space > 0 {
+        require!(
+            ctx.accounts.input_token_program.key() == TOKEN_2022_PROGRAM_ID,
+            ErrorCode::InvalidCpiInterface
+        );
+    }
+
+    // Initialize limit_order with default values (will be filled in create_limit_order)
+    let order = &mut ctx.accounts.limit_order;
+    order.creator = ctx.accounts.creator.key();
+    order.input_mint = Pubkey::default(); // Will be set in create_limit_order
+    order.output_mint = Pubkey::default(); // Will be set in create_limit_order
+    order.input_vault = ctx.accounts.input_vault.key();
+    order.user_destination_account = Pubkey::default(); // Will be set in create_limit_order
+    order.input_amount = 0; // Will be set in create_limit_order
+    order.min_output_amount = 0; // Will be set in create_limit_order
+    order.trigger_price_bps = 0; // Will be set in create_limit_order
+    order.trigger_type = TriggerType::TakeProfit; // Will be set in create_limit_order
+    order.expiry = 0; // Will be set in create_limit_order
+    order.status = OrderStatus::Open;
+    order.slippage_bps = 0; // Will be set in create_limit_order
+    order.bump = ctx.bumps.limit_order;
+
+    // Create the vault account manually to support extensions
+    let vault_authority_bump = ctx.accounts.vault_authority.bump;
+    let vault_seeds = [
+        b"order_vault",
+        limit_order_key.as_ref(),
+        &[vault_bump],
+    ];
+
+    anchor_lang::solana_program::program::invoke_signed(
+        &anchor_lang::solana_program::system_instruction::create_account(
+            &ctx.accounts.creator.key(),
+            &ctx.accounts.input_vault.key(),
+            ctx.accounts.rent.minimum_balance(total_size),
+            total_size as u64,
+            &ctx.accounts.input_token_program.key(),
+        ),
+        &[
+            ctx.accounts.creator.to_account_info(),
+            ctx.accounts.input_vault.to_account_info(),
+            ctx.accounts.system_program.to_account_info(),
+        ],
+        &[&vault_seeds],
+    )?;
+
+    // Initialize the token account with extensions
+    let authority_seeds = [
+        b"vault_authority".as_ref(),
+        &[vault_authority_bump],
+    ];
+    let signer_seeds = &[&authority_seeds[..]];
+
+    let initialize_ctx = CpiContext::new_with_signer(
+        ctx.accounts.input_token_program.to_account_info(),
+        InitializeAccount3 {
+            account: ctx.accounts.input_vault.to_account_info(),
+            mint: ctx.accounts.input_mint.to_account_info(),
+            authority: ctx.accounts.vault_authority.to_account_info(),
+        },
+        signer_seeds,
+    );
+
+    // Initialize account with extensions
+    // The token program will automatically handle extensions based on mint configuration
+    initialize_account3(initialize_ctx)?;
+
+    msg!(
+        "Successfully initialized limit order: {} and vault: {} for mint: {} (space: {} bytes)",
+        ctx.accounts.limit_order.key(),
+        ctx.accounts.input_vault.key(),
+        ctx.accounts.input_mint.key(),
+        total_size
+    );
+    Ok(())
+}
+
+/// Create limit order instruction accounts
+#[event_cpi]
+#[derive(Accounts)]
+#[instruction(nonce: u64)]
+pub struct CreateLimitOrder<'info> {
+    /// Vault authority PDA controlling all vaults
+    #[account(
+        seeds = [b"vault_authority"],
+        bump
+    )]
+    pub vault_authority: Account<'info, VaultAuthority>,
+
+    /// Limit order account (must be initialized separately using init_limit_order)
+    #[account(
+        mut,
+        seeds = [b"limit_order", creator.key().as_ref(), nonce.to_le_bytes().as_ref()],
+        bump = limit_order.bump
+    )]
+    pub limit_order: Account<'info, LimitOrder>,
+
+    /// Vault to hold input tokens until order execution
+    /// Must be created separately using init_limit_order
     #[account(
         mut,
         constraint = input_vault.mint == input_mint.key() @ ErrorCode::InvalidMint,
-        constraint = input_vault.owner == vault_authority.key() @ ErrorCode::InvalidVaultOwner
+        constraint = input_vault.owner == vault_authority.key() @ ErrorCode::InvalidVaultOwner,
+        constraint = input_vault.key() == limit_order.input_vault @ ErrorCode::InvalidVaultAddress
     )]
     pub input_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
@@ -365,15 +385,10 @@ pub fn create_limit_order(
         ErrorCode::InvalidSlippage
     );
 
-    // Validate that input_vault is created with correct seeds for this limit_order
-    // Vault uses creator + nonce seeds (same as limit_order), not limit_order.key()
-    let (expected_vault, _) = Pubkey::find_program_address(
-        &[b"order_vault", ctx.accounts.creator.key().as_ref(), nonce.to_le_bytes().as_ref()],
-        ctx.program_id,
-    );
+    // Validate that limit_order was initialized and matches the creator
     require!(
-        ctx.accounts.input_vault.key() == expected_vault,
-        ErrorCode::InvalidVaultAddress
+        ctx.accounts.limit_order.creator == ctx.accounts.creator.key(),
+        ErrorCode::UnauthorizedAdmin
     );
 
     // Transfer input tokens to order vault
@@ -391,12 +406,10 @@ pub fn create_limit_order(
         ctx.accounts.input_mint.decimals,
     )?;
 
-    // Initialize order account
+    // Update order account with order parameters
     let order = &mut ctx.accounts.limit_order;
-    order.creator = ctx.accounts.creator.key();
     order.input_mint = ctx.accounts.input_mint.key();
     order.output_mint = ctx.accounts.output_mint.key();
-    order.input_vault = ctx.accounts.input_vault.key();
     order.user_destination_account = ctx.accounts.user_destination_token_account.key();
     order.input_amount = input_amount;
     order.min_output_amount = min_output_amount;
@@ -405,7 +418,6 @@ pub fn create_limit_order(
     order.expiry = expiry;
     order.status = OrderStatus::Open;
     order.slippage_bps = slippage_bps;
-    order.bump = ctx.bumps.limit_order;
 
     // Emit order creation event
     emit_cpi!(LimitOrderCreated {
@@ -1039,22 +1051,21 @@ pub struct RouteAndCreateOrder<'info> {
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
 
-    /// Limit order account to be created
+    /// Limit order account (must be initialized separately using init_limit_order)
     #[account(
-        init,
-        payer = creator,
-        space = LimitOrder::SPACE,
+        mut,
         seeds = [b"limit_order", creator.key().as_ref(), order_nonce.to_le_bytes().as_ref()],
-        bump
+        bump = limit_order.bump
     )]
     pub limit_order: Account<'info, LimitOrder>,
 
     /// Vault to hold output tokens from swap (becomes order's input vault)
-    /// Must be created separately using create_order_vault_with_extensions for tokens with extensions
+    /// Must be created separately using init_limit_order for tokens with extensions
     #[account(
         mut,
         constraint = input_vault.mint == output_mint.key() @ ErrorCode::InvalidMint,
-        constraint = input_vault.owner == vault_authority.key() @ ErrorCode::InvalidVaultOwner
+        constraint = input_vault.owner == vault_authority.key() @ ErrorCode::InvalidVaultOwner,
+        constraint = input_vault.key() == limit_order.input_vault @ ErrorCode::InvalidVaultAddress
     )]
     pub input_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
@@ -1154,9 +1165,9 @@ pub fn route_and_create_order<'info>(
     require!(order_slippage_bps <= 1000, ErrorCode::InvalidSlippage);
 
     // Validate that input_vault is created with correct seeds for this limit_order
-    // Vault uses creator + nonce seeds (same as limit_order), not limit_order.key()
+    // Vault uses limit_order.key() as seed
     let (expected_vault, _) = Pubkey::find_program_address(
-        &[b"order_vault", ctx.accounts.creator.key().as_ref(), order_nonce.to_le_bytes().as_ref()],
+        &[b"order_vault", ctx.accounts.limit_order.key().as_ref()],
         ctx.program_id,
     );
     require!(
@@ -1328,13 +1339,17 @@ pub fn route_and_create_order<'info>(
         slippage_bps,
     });
 
-    // ===== STEP 6: CREATE LIMIT ORDER =====
+    // ===== STEP 6: UPDATE LIMIT ORDER =====
+
+    // Validate that limit_order was initialized and matches the creator
+    require!(
+        ctx.accounts.limit_order.creator == ctx.accounts.creator.key(),
+        ErrorCode::UnauthorizedAdmin
+    );
 
     let order = &mut ctx.accounts.limit_order;
-    order.creator = ctx.accounts.creator.key();
     order.input_mint = ctx.accounts.output_mint.key(); // Order input is swap output (e.g., USDT)
     order.output_mint = ctx.accounts.input_mint.key(); // Order output is swap input (e.g., SOL) - swap back to original token
-    order.input_vault = ctx.accounts.input_vault.key();
     order.user_destination_account = ctx.accounts.user_destination_account.key();
     order.input_amount = out_amount; // Amount after fee
     order.min_output_amount = order_min_output_amount;
@@ -1343,7 +1358,6 @@ pub fn route_and_create_order<'info>(
     order.expiry = order_expiry;
     order.status = OrderStatus::Open;
     order.slippage_bps = order_slippage_bps;
-    order.bump = ctx.bumps.limit_order;
 
     let order_key = order.key();
 

@@ -196,13 +196,13 @@ pub mod flipper {
         )
     }
 
-    /// Creates an order vault for limit orders with support for Token 2022 extensions
+    /// Initializes a limit order account and its associated vault with support for Token 2022 extensions
     /// This instruction supports tokens with extensions like confidential transactions (xstocks)
-    pub fn create_order_vault_with_extensions(
-        ctx: Context<CreateOrderVaultWithExtensions>,
-        order_nonce: u64,
+    pub fn init_limit_order(
+        ctx: Context<InitLimitOrder>,
+        nonce: u64,
         account_space: u16,
     ) -> Result<()> {
-        instructions::create_order_vault_with_extensions(ctx, order_nonce, account_space)
+        instructions::init_limit_order(ctx, nonce, account_space)
     }
 }

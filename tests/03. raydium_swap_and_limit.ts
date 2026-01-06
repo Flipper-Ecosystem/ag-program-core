@@ -491,21 +491,22 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
             program.programId
         );
 
-        // Vault now uses creator + nonce seeds (same as limit_order), not limit_order.key()
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+            [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
 
-        // Create vault first (for standard tokens, account_space = 0)
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
         await program.methods
-            .createOrderVaultWithExtensions(nonce, 0)
+            .initLimitOrder(nonce, 0)
             .accounts({
                 vaultAuthority,
-                payer: user.publicKey,
-                orderVault,
+                limitOrder,
+                inputVault: orderVault,
                 inputMint: sourceMint,
                 inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
                 systemProgram: SystemProgram.programId,
                 rent: SYSVAR_RENT_PUBKEY,
             })
@@ -576,21 +577,22 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
             program.programId
         );
 
-        // Vault now uses creator + nonce seeds (same as limit_order), not limit_order.key()
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+            [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
 
-        // Create vault first (for standard tokens, account_space = 0)
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
         await program.methods
-            .createOrderVaultWithExtensions(nonce, 0)
+            .initLimitOrder(nonce, 0)
             .accounts({
                 vaultAuthority,
-                payer: user.publicKey,
-                orderVault,
+                limitOrder,
+                inputVault: orderVault,
                 inputMint: sourceMint,
                 inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
                 systemProgram: SystemProgram.programId,
                 rent: SYSVAR_RENT_PUBKEY,
             })
@@ -701,21 +703,22 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
             program.programId
         );
 
-        // Vault now uses creator + nonce seeds (same as limit_order), not limit_order.key()
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+            [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
 
-        // Create vault first (for standard tokens, account_space = 0)
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
         await program.methods
-            .createOrderVaultWithExtensions(nonce, 0)
+            .initLimitOrder(nonce, 0)
             .accounts({
                 vaultAuthority,
-                payer: user.publicKey,
-                orderVault,
+                limitOrder,
+                inputVault: orderVault,
                 inputMint: sourceMint,
                 inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
                 systemProgram: SystemProgram.programId,
                 rent: SYSVAR_RENT_PUBKEY,
             })
@@ -795,21 +798,22 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
             program.programId
         );
 
-        // Vault now uses creator + nonce seeds (same as limit_order), not limit_order.key()
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("order_vault"), user.publicKey.toBuffer(), orderNonce.toArrayLike(Buffer, 'le', 8)],
+            [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
 
-        // Create vault first (for standard tokens, account_space = 0)
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
         await program.methods
-            .createOrderVaultWithExtensions(orderNonce, 0)
+            .initLimitOrder(orderNonce, 0)
             .accounts({
                 vaultAuthority,
-                payer: user.publicKey,
-                orderVault,
+                limitOrder,
+                inputVault: orderVault,
                 inputMint: destinationMint, // For route_and_create_order, vault holds output_mint tokens
                 inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
                 systemProgram: SystemProgram.programId,
                 rent: SYSVAR_RENT_PUBKEY,
             })
@@ -991,21 +995,22 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
             program.programId
         );
 
-        // Vault now uses creator + nonce seeds (same as limit_order), not limit_order.key()
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
-            [Buffer.from("order_vault"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+            [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
 
-        // Create vault first (for standard tokens, account_space = 0)
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
         await program.methods
-            .createOrderVaultWithExtensions(nonce, 0)
+            .initLimitOrder(nonce, 0)
             .accounts({
                 vaultAuthority,
-                payer: user.publicKey,
-                orderVault,
+                limitOrder,
+                inputVault: orderVault,
                 inputMint: sourceMint,
                 inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
                 systemProgram: SystemProgram.programId,
                 rent: SYSVAR_RENT_PUBKEY,
             })
@@ -1041,9 +1046,9 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
         // Execute order with price drop
         // For StopLoss: price_ratio <= 10000 - trigger_price_bps (9500)
         // price_ratio = (quotedOutAmount * 10000) / minOutputAmount
-        // So: quotedOutAmount <= 9500 * minOutputAmount / 10000 = 9500 * 30_000_000 / 10000 = 28_500_000
+        // So: quotedOutAmount <= 9500 * minOutputAmount / 10000 = 9500 * 33_000_000 / 10000 = 31_350_000
         // Use a value that clearly satisfies the trigger condition
-        const quotedOutAmount = new BN(27_000_000); // Less than 28_500_000 to trigger StopLoss
+        const quotedOutAmount = new BN(27_000_000); // Less than 31_350_000 to trigger StopLoss
         const platformFeeBps = 10;
 
         const routePlan = [
