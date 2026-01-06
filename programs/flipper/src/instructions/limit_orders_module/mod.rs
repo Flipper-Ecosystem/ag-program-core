@@ -186,6 +186,7 @@ pub fn init_limit_order(
     // Calculate the required account size for vault
     // Base token account size is 165 bytes
     // Extensions add additional space
+    // For pump tokens with C extension: account_space = 14 (179 bytes total)
     let base_size: usize = 165;
     let extension_size: usize = account_space as usize;
     let total_size = base_size + extension_size;
@@ -196,6 +197,13 @@ pub fn init_limit_order(
         require!(
             ctx.accounts.input_token_program.key() == TOKEN_2022_PROGRAM_ID,
             ErrorCode::InvalidCpiInterface
+        );
+        
+        msg!(
+            "Initializing vault with extensions: account_space={}, total_size={}, mint={}",
+            account_space,
+            total_size,
+            ctx.accounts.input_mint.key()
         );
     }
 
@@ -257,8 +265,19 @@ pub fn init_limit_order(
     );
 
     // Initialize account with extensions
-    // The token program will automatically handle extensions based on mint configuration
+    // For Token 2022, initialize_account3 automatically initializes extensions based on mint configuration
+    // This includes C extension (confidential transfer) if the mint has it enabled
+    // The account must have the correct size (165 + extension_size) for extensions to be initialized
     initialize_account3(initialize_ctx)?;
+
+    // Note: For tokens with C extension (like pump tokens), initialize_account3 will initialize
+    // the extension structure automatically. The account_space parameter must be set to 14
+    // (or the correct size for all extensions) when calling init_limit_order.
+    // 
+    // If initialization fails, verify:
+    // 1. account_space matches the actual extension size required by the mint (14 for C extension)
+    // 2. input_token_program is TOKEN_2022_PROGRAM_ID when account_space > 0
+    // 3. The mint actually has the C extension enabled
 
     msg!(
         "Successfully initialized limit order: {} and vault: {} for mint: {} (space: {} bytes)",
@@ -730,6 +749,7 @@ pub fn execute_limit_order<'info>(
 }
 
 /// Cancel limit order instruction accounts
+/// Supports cancellation of orders in Init or Open status
 #[event_cpi]
 #[derive(Accounts)]
 pub struct CancelLimitOrder<'info> {
@@ -740,35 +760,37 @@ pub struct CancelLimitOrder<'info> {
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
 
-    /// Limit order to cancel (will be closed, rent goes to creator, operator can also close cancelled orders)
+    /// Limit order to cancel (will be closed, rent goes to creator)
+    /// Can be cancelled in Init status (no tokens transferred yet) or Open status (tokens in vault)
     #[account(
         mut,
         close = creator,
-        constraint = limit_order.status == OrderStatus::Open @ ErrorCode::InvalidOrderStatus,
+        constraint = (limit_order.status == OrderStatus::Init || limit_order.status == OrderStatus::Open) @ ErrorCode::InvalidOrderStatus,
         constraint = limit_order.creator == creator.key() @ ErrorCode::UnauthorizedAdmin
     )]
     pub limit_order: Account<'info, LimitOrder>,
 
     /// Vault holding input tokens
+    /// For Init status, vault exists but is empty (no tokens transferred yet)
+    /// For Open status, vault contains input tokens
     #[account(
         mut,
-        constraint = input_vault.key() == limit_order.input_vault @ ErrorCode::InvalidVaultAddress,
-        constraint = input_vault.mint == limit_order.input_mint @ ErrorCode::InvalidMint
+        constraint = input_vault.key() == limit_order.input_vault @ ErrorCode::InvalidVaultAddress
     )]
     pub input_vault: InterfaceAccount<'info, TokenAccount>,
 
     /// User's account to receive refunded tokens
+    /// Only used for Open status when refunding tokens
+    /// For Init status, this is still required but won't be used
     #[account(
         mut,
-        constraint = user_input_token_account.mint == limit_order.input_mint,
         constraint = user_input_token_account.owner == creator.key()
     )]
     pub user_input_token_account: InterfaceAccount<'info, TokenAccount>,
 
-    /// Input token mint (must match limit_order.input_mint)
-    #[account(
-        constraint = input_mint.key() == limit_order.input_mint @ ErrorCode::InvalidMint
-    )]
+    /// Input token mint
+    /// Only used for Open status when refunding tokens
+    /// For Init status, this is still required but won't be used
     pub input_mint: InterfaceAccount<'info, Mint>,
     /// Token program for input tokens
     pub input_token_program: Interface<'info, TokenInterface>,
@@ -778,7 +800,7 @@ pub struct CancelLimitOrder<'info> {
     pub creator: Signer<'info>,
 }
 
-/// Cancels an open limit order and refunds tokens to creator
+/// Cancels a limit order in Init or Open status and refunds tokens to creator
 pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>) -> Result<()> {
     // Prepare PDA signer seeds
     let vault_authority_bump = ctx.bumps.vault_authority;
@@ -788,41 +810,90 @@ pub fn cancel_limit_order(ctx: Context<CancelLimitOrder>) -> Result<()> {
     ];
     let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
 
-    // Refund input tokens to creator
-    transfer_checked(
-        CpiContext::new_with_signer(
-            ctx.accounts.input_token_program.to_account_info(),
-            TransferChecked {
-                from: ctx.accounts.input_vault.to_account_info(),
-                to: ctx.accounts.user_input_token_account.to_account_info(),
-                authority: ctx.accounts.vault_authority.to_account_info(),
-                mint: ctx.accounts.input_mint.to_account_info(),
-            },
-            signer_seeds
-        ),
-        ctx.accounts.limit_order.input_amount,
-        ctx.accounts.input_mint.decimals,
-    )?;
+    // Handle cancellation based on order status
+    match ctx.accounts.limit_order.status {
+        OrderStatus::Init => {
+            // For Init status: input_amount is 0, no tokens were transferred
+            // Vault exists but is empty, so we can close it to recover rent
+            // Always close vault for Init status (it's always empty)
+            // Verify vault is empty before closing
+            require!(
+                ctx.accounts.input_vault.amount == 0,
+                ErrorCode::InvalidAmount
+            );
+            
+            close_account(
+                CpiContext::new_with_signer(
+                    ctx.accounts.input_token_program.to_account_info(),
+                    CloseAccount {
+                        account: ctx.accounts.input_vault.to_account_info(),
+                        destination: ctx.accounts.creator.to_account_info(),
+                        authority: ctx.accounts.vault_authority.to_account_info(),
+                    },
+                    signer_seeds
+                )
+            )?;
+        },
+        OrderStatus::Open => {
+            // For Open status: input_amount > 0, refund tokens to creator
+            require!(
+                ctx.accounts.input_vault.mint == ctx.accounts.limit_order.input_mint,
+                ErrorCode::InvalidMint
+            );
+            require!(
+                ctx.accounts.user_input_token_account.mint == ctx.accounts.limit_order.input_mint,
+                ErrorCode::InvalidMint
+            );
+            require!(
+                ctx.accounts.input_mint.key() == ctx.accounts.limit_order.input_mint,
+                ErrorCode::InvalidMint
+            );
+            require!(
+                ctx.accounts.limit_order.input_amount > 0,
+                ErrorCode::InvalidAmount
+            );
+
+            // Refund input tokens to creator
+            transfer_checked(
+                CpiContext::new_with_signer(
+                    ctx.accounts.input_token_program.to_account_info(),
+                    TransferChecked {
+                        from: ctx.accounts.input_vault.to_account_info(),
+                        to: ctx.accounts.user_input_token_account.to_account_info(),
+                        authority: ctx.accounts.vault_authority.to_account_info(),
+                        mint: ctx.accounts.input_mint.to_account_info(),
+                    },
+                    signer_seeds
+                ),
+                ctx.accounts.limit_order.input_amount,
+                ctx.accounts.input_mint.decimals,
+            )?;
+
+            // Close input_vault and return rent to creator
+            // All tokens have been refunded to creator, so vault is empty
+            close_account(
+                CpiContext::new_with_signer(
+                    ctx.accounts.input_token_program.to_account_info(),
+                    CloseAccount {
+                        account: ctx.accounts.input_vault.to_account_info(),
+                        destination: ctx.accounts.creator.to_account_info(),
+                        authority: ctx.accounts.vault_authority.to_account_info(),
+                    },
+                    signer_seeds
+                )
+            )?;
+        },
+        _ => {
+            // Should not reach here due to constraint check
+            return Err(ErrorCode::InvalidOrderStatus.into());
+        }
+    }
 
     // Emit cancellation event before account is closed
     emit_cpi!(LimitOrderCancelled {
         order: ctx.accounts.limit_order.key(),
         creator: ctx.accounts.creator.key(),
     });
-
-    // Close input_vault and return rent to creator
-    // All tokens have been refunded to creator, so vault is empty
-    close_account(
-        CpiContext::new_with_signer(
-            ctx.accounts.input_token_program.to_account_info(),
-            CloseAccount {
-                account: ctx.accounts.input_vault.to_account_info(),
-                destination: ctx.accounts.creator.to_account_info(),
-                authority: ctx.accounts.vault_authority.to_account_info(),
-            },
-            signer_seeds
-        )
-    )?;
 
     // Account will be closed automatically and rent transferred to creator due to `close = creator`
     // Note: Operator can also close cancelled orders if they weren't closed by creator
@@ -948,6 +1019,9 @@ pub fn cancel_expired_limit_order_by_operator(ctx: Context<CancelExpiredLimitOrd
 }
 
 /// Close limit order by operator instruction accounts
+/// Supports closing orders in Init, Filled, or Cancelled status
+/// For Init: vault is empty (no tokens transferred), rent goes to operator
+/// For Filled/Cancelled: vault is empty, rent goes to operator
 #[event_cpi]
 #[derive(Accounts)]
 pub struct CloseLimitOrderByOperator<'info> {
@@ -965,15 +1039,22 @@ pub struct CloseLimitOrderByOperator<'info> {
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
 
-    /// Limit order to close (must be filled or cancelled)
+    /// Limit order to close (must be Init, Filled, or Cancelled)
+    /// Operator cannot close Open orders - only creator can cancel them
     #[account(
         mut,
         close = operator,
-        constraint = limit_order.status == OrderStatus::Filled || limit_order.status == OrderStatus::Cancelled @ ErrorCode::InvalidOrderStatus
+        constraint = (
+            limit_order.status == OrderStatus::Init ||
+            limit_order.status == OrderStatus::Filled ||
+            limit_order.status == OrderStatus::Cancelled
+        ) @ ErrorCode::InvalidOrderStatus
     )]
     pub limit_order: Account<'info, LimitOrder>,
 
     /// Vault holding input tokens (should be empty, will be closed)
+    /// For Init: vault exists but is empty (no tokens transferred)
+    /// For Filled/Cancelled: vault is empty (tokens were transferred/refunded)
     #[account(
         mut,
         constraint = input_vault.key() == limit_order.input_vault @ ErrorCode::InvalidVaultAddress
@@ -994,7 +1075,10 @@ pub struct CloseLimitOrderByOperator<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Closes a filled or cancelled limit order and collects rent for the operator
+/// Closes a limit order by operator and collects rent
+/// Supports Init, Filled, and Cancelled statuses
+/// For Init: vault is empty (no tokens transferred), rent goes to operator
+/// For Filled/Cancelled: vault is empty, rent goes to operator
 pub fn close_limit_order_by_operator(ctx: Context<CloseLimitOrderByOperator>) -> Result<()> {
     let order_key = ctx.accounts.limit_order.key();
     let operator_key = ctx.accounts.operator.key();
@@ -1011,6 +1095,7 @@ pub fn close_limit_order_by_operator(ctx: Context<CloseLimitOrderByOperator>) ->
     let signer_seeds: &[&[&[u8]]] = &[authority_seeds];
 
     // Close input_vault and return rent to operator
+    // For Init status: vault is empty (no tokens were transferred)
     // For filled orders: vault is empty (tokens were transferred during execution)
     // For cancelled orders: vault should be empty (tokens were refunded during cancellation)
     // If vault still exists and is empty, close it to recover rent

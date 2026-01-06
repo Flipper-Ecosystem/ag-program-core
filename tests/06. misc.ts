@@ -1251,7 +1251,80 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             );*/
         });
 
-        it("7.2. Cancel limit order - verify account is closed and creator receives rent", async () => {
+        it("7.2. Cancel limit order (Init status) - verify account is closed and creator receives rent", async () => {
+            const nonce = new BN(Date.now() + 2000000); // Ensure unique nonce
+
+            const [limitOrder] = PublicKey.findProgramAddressSync(
+                [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+                program.programId
+            );
+
+            // Vault now uses limit_order.key() as seed
+            const [orderVault] = PublicKey.findProgramAddressSync(
+                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                program.programId
+            );
+
+            // Initialize limit order and vault first (for standard tokens, account_space = 0)
+            // This creates an order in Init status (not yet filled with createLimitOrder)
+            await program.methods
+                .initLimitOrder(nonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
+
+            // Verify order is in Init status
+            const orderAccountBefore = await program.account.limitOrder.fetch(limitOrder);
+            assert.equal(orderAccountBefore.status.init !== undefined, true, "Order should be in Init status");
+
+            // Verify vault is empty
+            const vaultAccount = await getAccount(provider.connection, orderVault);
+            assert.equal(vaultAccount.amount.toString(), "0", "Vault should be empty for Init order");
+
+            // Get initial creator balance
+            const initialCreatorBalance = await provider.connection.getBalance(user.publicKey);
+
+            // Creator can cancel Init order
+            await program.methods
+                .cancelLimitOrder()
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    userInputTokenAccount: userSourceTokenAccount,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                })
+                .signers([user])
+                .rpc();
+
+            // Verify order account is now closed
+            const orderAccountInfoAfterCancel = await provider.connection.getAccountInfo(limitOrder);
+            assert.equal(orderAccountInfoAfterCancel, null, "Order account should be closed after cancel");
+
+            // Verify vault is closed
+            const vaultAccountInfo = await provider.connection.getAccountInfo(orderVault);
+            assert.equal(vaultAccountInfo, null, "Vault should be closed");
+
+            // Verify creator received rent
+            const finalCreatorBalance = await provider.connection.getBalance(user.publicKey);
+            assert(
+                finalCreatorBalance > initialCreatorBalance,
+                "Creator should receive rent from closed order account"
+            );
+        });
+
+        it("7.2.1. Cancel limit order (Open status) - verify account is closed and creator receives rent", async () => {
             const nonce = new BN(Date.now());
             const inputAmount = new BN(50_000_000);
             const minOutputAmount = new BN(45_000_000);
@@ -1346,6 +1419,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 "Creator should receive rent from closed order account"
             );
         });
+
 
         it("7.3. Cancel expired limit order by operator - verify rent goes to operator and tokens to creator", async () => {
             const nonce = new BN(Date.now());
@@ -1567,7 +1641,80 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             );
         });
 
-        it("7.4. Close limit order by operator - should fail for open order", async () => {
+        it("7.3.1. Close limit order by operator - should succeed for Init order", async () => {
+            const nonce = new BN(Date.now() + 1000000); // Ensure unique nonce
+
+            const [limitOrder] = PublicKey.findProgramAddressSync(
+                [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+                program.programId
+            );
+
+            // Vault now uses limit_order.key() as seed
+            const [orderVault] = PublicKey.findProgramAddressSync(
+                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                program.programId
+            );
+
+            // Initialize limit order and vault first (for standard tokens, account_space = 0)
+            // This creates an order in Init status (not yet filled with createLimitOrder)
+            await program.methods
+                .initLimitOrder(nonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
+
+            // Verify order is in Init status
+            const orderAccount = await program.account.limitOrder.fetch(limitOrder);
+            assert.equal(orderAccount.status.init !== undefined, true, "Order should be in Init status");
+
+            // Verify vault is empty
+            const vaultAccount = await getAccount(provider.connection, orderVault);
+            assert.equal(vaultAccount.amount.toString(), "0", "Vault should be empty for Init order");
+
+            // Get initial operator balance
+            const initialOperatorBalance = await provider.connection.getBalance(operator.publicKey);
+
+            // Operator can close Init order
+            await program.methods
+                .closeLimitOrderByOperator()
+                .accounts({
+                    adapterRegistry,
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([operator])
+                .rpc();
+
+            // Verify order account is closed
+            const orderAccountInfo = await provider.connection.getAccountInfo(limitOrder);
+            assert.equal(orderAccountInfo, null, "Order account should be closed");
+
+            // Verify vault is closed
+            const vaultAccountInfo = await provider.connection.getAccountInfo(orderVault);
+            assert.equal(vaultAccountInfo, null, "Vault should be closed");
+
+            // Verify operator received rent
+            const finalOperatorBalance = await provider.connection.getBalance(operator.publicKey);
+            assert(
+                finalOperatorBalance > initialOperatorBalance,
+                "Operator should receive rent from closed order and vault accounts"
+            );
+        });
+
+        it("7.4. Close limit order by operator - should fail for Open order (only Init/Filled/Cancelled allowed)", async () => {
             const nonce = new BN(Date.now());
             const inputAmount = new BN(50_000_000);
             const minOutputAmount = new BN(45_000_000);
@@ -1653,7 +1800,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             }
         });
 
-        it("7.5. Close limit order by operator - should fail for non-operator", async () => {
+        it("7.5. Close limit order by operator - should fail for non-operator (InvalidOperator)", async () => {
             const nonce = new BN(Date.now());
             const inputAmount = new BN(50_000_000);
             const minOutputAmount = new BN(45_000_000);
