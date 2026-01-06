@@ -27,12 +27,14 @@ pub enum TriggerType {
 #[repr(u8)]
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrderStatus {
+    /// Order is being initialized (before create_limit_order)
+    Init = 0,
     /// Order is active and waiting for execution
-    Open = 0,
+    Open = 1,
     /// Order has been executed
-    Filled = 1,
+    Filled = 2,
     /// Order has been cancelled by creator
-    Cancelled = 2,
+    Cancelled = 3,
 }
 
 /// Limit order with trigger price mechanism
@@ -209,7 +211,7 @@ pub fn init_limit_order(
     order.trigger_price_bps = 0; // Will be set in create_limit_order
     order.trigger_type = TriggerType::TakeProfit; // Will be set in create_limit_order
     order.expiry = 0; // Will be set in create_limit_order
-    order.status = OrderStatus::Open;
+    order.status = OrderStatus::Init;
     order.slippage_bps = 0; // Will be set in create_limit_order
     order.bump = ctx.bumps.limit_order;
 
@@ -284,7 +286,8 @@ pub struct CreateLimitOrder<'info> {
     #[account(
         mut,
         seeds = [b"limit_order", creator.key().as_ref(), nonce.to_le_bytes().as_ref()],
-        bump = limit_order.bump
+        bump = limit_order.bump,
+        constraint = limit_order.status == OrderStatus::Init @ ErrorCode::InvalidOrderStatus
     )]
     pub limit_order: Account<'info, LimitOrder>,
 
@@ -1055,7 +1058,8 @@ pub struct RouteAndCreateOrder<'info> {
     #[account(
         mut,
         seeds = [b"limit_order", creator.key().as_ref(), order_nonce.to_le_bytes().as_ref()],
-        bump = limit_order.bump
+        bump = limit_order.bump,
+        constraint = limit_order.status == OrderStatus::Init @ ErrorCode::InvalidOrderStatus
     )]
     pub limit_order: Account<'info, LimitOrder>,
 
