@@ -24,17 +24,19 @@ pub enum TriggerType {
 }
 
 /// Order execution status
+/// Order: Open = 0, Filled = 1, Cancelled = 2, Init = 3
+/// This order is maintained for backward compatibility with existing orders
 #[repr(u8)]
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrderStatus {
-    /// Order is being initialized (before create_limit_order)
-    Init = 0,
     /// Order is active and waiting for execution
-    Open = 1,
+    Open = 0,
     /// Order has been executed
-    Filled = 2,
+    Filled = 1,
     /// Order has been cancelled by creator
-    Cancelled = 3,
+    Cancelled = 2,
+    /// Order is being initialized (before create_limit_order)
+    Init = 3,
 }
 
 /// Limit order with trigger price mechanism
