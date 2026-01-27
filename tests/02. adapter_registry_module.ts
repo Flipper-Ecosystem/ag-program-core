@@ -421,7 +421,7 @@ describe("Flipper Swap Protocol - Adapter Registry Module", () => {
                 { pubkey: tickArray0, isSigner: false, isWritable: true },
                 { pubkey: tickArray1, isSigner: false, isWritable: true },
                 { pubkey: tickArray2, isSigner: false, isWritable: true },
-                { pubkey: oracle, isSigner: false, isWritable: false },
+                { pubkey: oracle, isSigner: false, isWritable: true },
             ];
 
             await program.methods

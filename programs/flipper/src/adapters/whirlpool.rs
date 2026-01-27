@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke_signed;
-use anchor_spl::token::{Token, TokenAccount};
+use anchor_spl::token_interface::TokenAccount;
 use crate::adapters::adapter_connector_module::{AdapterContext};
 use crate::adapters::dex_adapter::DexAdapter;
 use crate::errors::ErrorCode;
@@ -81,6 +81,8 @@ impl DexAdapter for WhirlpoolAdapter {
         }
 
         // Record initial output token balance
+        // Note: Works with Token2022 accounts with extensions (e.g., 179 bytes) because
+        // token_interface::TokenAccount only reads base structure (165 bytes)
         let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
         let initial_output_amount = output_vault_data.amount;
 
@@ -117,6 +119,45 @@ impl DexAdapter for WhirlpoolAdapter {
         instruction_data.extend_from_slice(&SWAP_V2_DISCRIMINATOR);
         instruction_data.extend_from_slice(&swap_args.try_to_vec()?);
 
+        // Determine correct token_owner_accounts and token_mints based on swap direction (a_to_b)
+        // When swap direction changes, we need to swap both token_owner_accounts AND token_mints
+        //
+        // Whirlpool pool has fixed token order: token_mint_a and token_mint_b are fixed at pool creation
+        // The swap direction (a_to_b) determines how tokens flow:
+        // - a_to_b = true: swap A -> B (take from token_owner_account_a, send to token_owner_account_b)
+        // - a_to_b = false: swap B -> A (take from token_owner_account_b, send to token_owner_account_a)
+        //
+        // Executor provides:
+        // - ctx.input_account: vault containing the token we're swapping FROM
+        // - ctx.output_account: vault containing the token we're swapping TO
+        //
+        // When a_to_b = false (swapping B -> A, e.g., SOL -> JUP):
+        //   - token_owner_account_b: account to take FROM (contains token B = SOL = input_account)
+        //   - token_owner_account_a: account to send TO (contains token A = JUP = output_account)
+        //   - token_mint_b: mint of token we're swapping FROM (input)
+        //   - token_mint_a: mint of token we're swapping TO (output)
+        let (token_owner_account_a, token_owner_account_b, token_mint_a, token_mint_b) = if self.a_to_b {
+            // a_to_b = true: swapping A -> B
+            // input_account contains token A, output_account contains token B
+            (
+                ctx.input_account.clone(),
+                ctx.output_account.clone(),
+                adapter_accounts[5].clone(),  // token_mint_a (from remaining_accounts)
+                adapter_accounts[6].clone(),  // token_mint_b (from remaining_accounts)
+            )
+        } else {
+            // a_to_b = false: swapping B -> A (e.g., SOL -> JUP)
+            // input_account contains token B (SOL), but Whirlpool expects it in token_owner_account_b
+            // output_account contains token A (JUP), but Whirlpool expects it in token_owner_account_a
+            // We also need to swap token_mints to match the swap direction
+            (
+                ctx.output_account.clone(),
+                ctx.input_account.clone(),
+                adapter_accounts[6].clone(),  // token_mint_b becomes token_mint_a (swapped)
+                adapter_accounts[5].clone(),  // token_mint_a becomes token_mint_b (swapped)
+            )
+        };
+
         // Build account metas in SwapV2 order
         let mut accounts = vec![
             AccountMeta::new_readonly(adapter_accounts[1].key(), false),    // token_program_a
@@ -124,16 +165,16 @@ impl DexAdapter for WhirlpoolAdapter {
             AccountMeta::new_readonly(adapter_accounts[3].key(), false),    // memo_program
             AccountMeta::new_readonly(ctx.authority.key(), true),           // token_authority
             AccountMeta::new(adapter_accounts[4].key(), false),             // whirlpool
-            AccountMeta::new_readonly(adapter_accounts[5].key(), false),    // token_mint_a
-            AccountMeta::new_readonly(adapter_accounts[6].key(), false),    // token_mint_b
-            AccountMeta::new(ctx.input_account.key(), false),               // token_owner_account_a
-            AccountMeta::new(adapter_accounts[8].key(), false),             // token_vault_a
-            AccountMeta::new(ctx.output_account.key(), false),              // token_owner_account_b
-            AccountMeta::new(adapter_accounts[10].key(), false),             // token_vault_b
+            AccountMeta::new_readonly(token_mint_a.key(), false),            // token_mint_a (swapped if a_to_b = false)
+            AccountMeta::new_readonly(token_mint_b.key(), false),            // token_mint_b (swapped if a_to_b = false)
+            AccountMeta::new(token_owner_account_a.key(), false),            // token_owner_account_a (receives token A)
+            AccountMeta::new(adapter_accounts[8].key(), false),             // token_vault_a (contains token A)
+            AccountMeta::new(token_owner_account_b.key(), false),           // token_owner_account_b (receives token B)
+            AccountMeta::new(adapter_accounts[10].key(), false),             // token_vault_b (contains token B)
             AccountMeta::new(adapter_accounts[11].key(), false),             // tick_array_0
             AccountMeta::new(adapter_accounts[12].key(), false),             // tick_array_1
             AccountMeta::new(adapter_accounts[13].key(), false),            // tick_array_2
-            AccountMeta::new_readonly(adapter_accounts[14].key(), false),   // oracle
+            AccountMeta::new(adapter_accounts[14].key(), false),            // oracle (mut in SwapV2)
         ];
 
 
@@ -149,11 +190,11 @@ impl DexAdapter for WhirlpoolAdapter {
             adapter_accounts[3].clone(),     // memo_program
             ctx.authority.clone(),           // token_authority
             adapter_accounts[4].clone(),     // whirlpool
-            adapter_accounts[5].clone(),     // token_mint_a
-            adapter_accounts[6].clone(),     // token_mint_b
-            ctx.input_account.clone(),       // token_owner_account_a
+            token_mint_a.clone(),            // token_mint_a (swapped if a_to_b = false)
+            token_mint_b.clone(),            // token_mint_b (swapped if a_to_b = false)
+            token_owner_account_a.clone(),   // token_owner_account_a
             adapter_accounts[8].clone(),     // token_vault_a
-            ctx.output_account.clone(),      // token_owner_account_b
+            token_owner_account_b.clone(),   // token_owner_account_b
             adapter_accounts[10].clone(),     // token_vault_b
             adapter_accounts[11].clone(),     // tick_array_0
             adapter_accounts[12].clone(),     // tick_array_1
@@ -189,6 +230,7 @@ impl DexAdapter for WhirlpoolAdapter {
 
         invoke_signed(&instruction, &account_infos, signer_seeds)?;
 
+        // Note: Works with Token2022 accounts with extensions (e.g., 179 bytes)
         let output_vault_data = TokenAccount::try_deserialize(&mut ctx.output_account.data.borrow().as_ref())?;
         let output_amount = output_vault_data.amount
             .checked_sub(initial_output_amount)
@@ -246,10 +288,28 @@ impl DexAdapter for WhirlpoolAdapter {
         }
 
         // Validate pool vault accounts (token_vault_a at index 8, token_vault_b at index 10)
+        // Note: token_mint_a and token_mint_b in remaining_accounts are passed in swap direction order,
+        // but vaults are always in pool's fixed order (token_vault_a contains pool's token A, token_vault_b contains pool's token B)
+        // We need to account for swap direction when validating mints against vaults
         let token_vault_a = &adapter_accounts[8];
         let token_vault_b = &adapter_accounts[10];
-        let token_mint_a = &adapter_accounts[5];
-        let token_mint_b = &adapter_accounts[6];
+        let token_mint_from_remaining = &adapter_accounts[5];  // mint in swap direction (A if a_to_b=true, B if a_to_b=false)
+        let token_mint_to_remaining = &adapter_accounts[6];    // mint in swap direction (B if a_to_b=true, A if a_to_b=false)
+
+        // Determine which mint corresponds to which vault based on swap direction
+        // Vaults are always in pool's fixed order:
+        // - token_vault_a always contains pool's token A
+        // - token_vault_b always contains pool's token B
+        // But mints in remaining_accounts are in swap direction order
+        let (expected_mint_for_vault_a, expected_mint_for_vault_b) = if self.a_to_b {
+            // a_to_b = true: swapping A -> B
+            // token_mint_from_remaining is A (matches vault_a), token_mint_to_remaining is B (matches vault_b)
+            (token_mint_from_remaining, token_mint_to_remaining)
+        } else {
+            // a_to_b = false: swapping B -> A
+            // token_mint_from_remaining is B (matches vault_b), token_mint_to_remaining is A (matches vault_a)
+            (token_mint_to_remaining, token_mint_from_remaining)
+        };
 
         // Ensure vault accounts are not default pubkeys
         if token_vault_a.key() == Pubkey::default() || token_vault_b.key() == Pubkey::default() {
@@ -257,16 +317,20 @@ impl DexAdapter for WhirlpoolAdapter {
         }
 
         // Validate vault accounts are valid token accounts
+        // Note: token_interface::TokenAccount::try_deserialize works with Token2022 accounts
+        // that have extensions (e.g., confidential transfer, 179 bytes = 165 base + 14 extension)
+        // because it only reads the base TokenAccount structure (first 165 bytes),
+        // and extensions remain untouched. This is safe as we only access base fields (mint, owner, amount).
         let vault_a_data = TokenAccount::try_deserialize(&mut token_vault_a.data.borrow().as_ref())
             .map_err(|_| ErrorCode::InvalidAccount)?;
         let vault_b_data = TokenAccount::try_deserialize(&mut token_vault_b.data.borrow().as_ref())
             .map_err(|_| ErrorCode::InvalidAccount)?;
 
-        // Validate vault mints match expected token mints
-        if vault_a_data.mint != token_mint_a.key() {
+        // Validate vault mints match expected token mints (accounting for swap direction)
+        if vault_a_data.mint != expected_mint_for_vault_a.key() {
             return Err(ErrorCode::InvalidMint.into());
         }
-        if vault_b_data.mint != token_mint_b.key() {
+        if vault_b_data.mint != expected_mint_for_vault_b.key() {
             return Err(ErrorCode::InvalidMint.into());
         }
 

@@ -312,12 +312,12 @@ describe("Meteora Adapter - End to End Tests for Swaps", () => {
             { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false }, // 13: token_y_program
             { pubkey: Keypair.generate().publicKey, isWritable: false, isSigner: false }, // 14: memo_program
             { pubkey: meteoraEventAuthority, isWritable: false, isSigner: false }, // 15: event_authority
-            { pubkey: mockMeteoraProgramId, isWritable: true, isSigner: false }, // 16: program
+            { pubkey: mockMeteoraProgramId, isWritable: false, isSigner: false }, // 16: program (CPI event, readonly)
             { pubkey: meteoraBinArray0, isWritable: true, isSigner: false }, // 17: bin_array_0
             { pubkey: meteoraBinArray1, isWritable: true, isSigner: false }, // 18: bin_array_1
             { pubkey: meteoraBinArray2, isWritable: true, isSigner: false }, // 19: bin_array_2
-            { pubkey: mockMeteoraProgramId, isWritable: true, isSigner: false }, //20
-            { pubkey: outputVault, isWritable: true, isSigner: false }, //21
+            { pubkey: mockMeteoraProgramId, isWritable: false, isSigner: false }, // 20: program ID (readonly, для CPI)
+            { pubkey: outputVault, isWritable: true, isSigner: false }, // 21: output vault
         ];
 
         const initialSourceBalance = (await getAccount(provider.connection, userTokenXAccount)).amount;

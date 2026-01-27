@@ -403,6 +403,7 @@ pub struct SwapV2<'info> {
     pub tick_array_2: Account<'info, TickArray>,
 
     /// CHECK: Oracle account (optional)
+    #[account(mut)]
     pub oracle: UncheckedAccount<'info>
 
 }

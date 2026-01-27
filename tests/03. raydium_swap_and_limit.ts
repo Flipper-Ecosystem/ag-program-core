@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program, BN } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram, Transaction } from "@solana/web3.js";
+import { PublicKey, Keypair, SystemProgram, Transaction, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
     TOKEN_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -491,10 +491,27 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
             program.programId
         );
 
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
             [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
+
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .initLimitOrder(nonce, 0)
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         const initialBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
 
@@ -560,10 +577,27 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
             program.programId
         );
 
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
             [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
+
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .initLimitOrder(nonce, 0)
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         await program.methods
             .createLimitOrder(
@@ -669,10 +703,27 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
             program.programId
         );
 
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
             [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
+
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .initLimitOrder(nonce, 0)
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         // Create order
         await program.methods
@@ -747,10 +798,27 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
             program.programId
         );
 
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
             [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
+
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .initLimitOrder(orderNonce, 0)
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                inputMint: destinationMint, // For route_and_create_order, vault holds output_mint tokens
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         // Route plan for swap source -> destination
         const routePlan = [
@@ -927,10 +995,27 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
             program.programId
         );
 
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
             [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
+
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .initLimitOrder(nonce, 0)
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         await program.methods
             .createLimitOrder(
@@ -961,9 +1046,9 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
         // Execute order with price drop
         // For StopLoss: price_ratio <= 10000 - trigger_price_bps (9500)
         // price_ratio = (quotedOutAmount * 10000) / minOutputAmount
-        // So: quotedOutAmount <= 9500 * minOutputAmount / 10000 = 9500 * 30_000_000 / 10000 = 28_500_000
+        // So: quotedOutAmount <= 9500 * minOutputAmount / 10000 = 9500 * 33_000_000 / 10000 = 31_350_000
         // Use a value that clearly satisfies the trigger condition
-        const quotedOutAmount = new BN(27_000_000); // Less than 28_500_000 to trigger StopLoss
+        const quotedOutAmount = new BN(27_000_000); // Less than 31_350_000 to trigger StopLoss
         const platformFeeBps = 10;
 
         const routePlan = [

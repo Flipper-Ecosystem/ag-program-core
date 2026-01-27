@@ -4,6 +4,7 @@ use anchor_spl::token_interface::{
     transfer_checked, TransferChecked,
     initialize_account3, InitializeAccount3
 };
+use anchor_spl::token_2022::ID as TOKEN_2022_PROGRAM_ID;
 use crate::errors::ErrorCode;
 
 #[account]
@@ -284,5 +285,138 @@ pub fn withdraw_platform_fees(ctx: Context<WithdrawPlatformFees>, amount: u64) -
     )?;
 
     msg!("Withdrew {} tokens from platform fee account to {}", amount, ctx.accounts.destination.key());
+    Ok(())
+}
+
+/// Creates a vault for Token 2022 tokens with extensions
+/// This instruction supports tokens with extensions like:
+/// - metadataPointer
+/// - permanentDelegate
+/// - defaultAccountState
+/// - scaledUiAmountConfig
+/// - pausableConfig
+/// - confidentialTransferMint
+/// - transferHook
+/// - tokenMetadata
+/// 
+/// The account_space parameter should include the size of all extensions.
+/// For xstocks tokens with the provided extensions, typical size is around 300-400 bytes.
+#[derive(Accounts)]
+#[instruction(account_space: u16)]
+pub struct CreateVaultWithExtensions<'info> {
+    #[account(
+        seeds = [b"vault_authority"],
+        bump = vault_authority.bump,
+        constraint = vault_authority.admin != Pubkey::default() @ ErrorCode::VaultAuthorityNotInitialized,
+        constraint = vault_authority.admin == admin.key() @ ErrorCode::UnauthorizedAdmin
+    )]
+    pub vault_authority: Account<'info, VaultAuthority>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    pub admin: Signer<'info>,
+
+    /// CHECK: The vault account will be initialized by this instruction
+    #[account(mut)]
+    pub vault: AccountInfo<'info>,
+
+    #[account(
+        constraint = vault_mint.to_account_info().owner == &vault_token_program.key() @ ErrorCode::InvalidCpiInterface
+    )]
+    pub vault_mint: InterfaceAccount<'info, Mint>,
+    pub vault_token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+pub fn create_vault_with_extensions(ctx: Context<CreateVaultWithExtensions>, account_space: u16) -> Result<()> {
+    // Verify that we're using Token 2022 program
+    require!(
+        ctx.accounts.vault_token_program.key() == TOKEN_2022_PROGRAM_ID,
+        ErrorCode::InvalidCpiInterface
+    );
+
+    // Derive vault PDA
+    let mint_key = ctx.accounts.vault_mint.key();
+    let (vault_pda, vault_bump) = Pubkey::find_program_address(
+        &[b"vault", mint_key.as_ref()],
+        ctx.program_id,
+    );
+
+    require!(
+        ctx.accounts.vault.key() == vault_pda,
+        ErrorCode::InvalidVaultAddress
+    );
+
+    // Calculate the required account size
+    // Base token account size is 165 bytes
+    // Extensions add additional space
+    let base_size: usize = 165;
+    let extension_size: usize = account_space as usize;
+    let total_size = base_size + extension_size;
+
+    // Create the account first
+    let vault_authority_bump = ctx.accounts.vault_authority.bump;
+    let mint_key_bytes = mint_key.as_ref();
+    let vault_seeds = [
+        b"vault",
+        mint_key_bytes,
+        &[vault_bump],
+    ];
+
+    anchor_lang::solana_program::program::invoke_signed(
+        &anchor_lang::solana_program::system_instruction::create_account(
+            &ctx.accounts.payer.key(),
+            &ctx.accounts.vault.key(),
+            ctx.accounts.rent.minimum_balance(total_size),
+            total_size as u64,
+            &ctx.accounts.vault_token_program.key(),
+        ),
+        &[
+            ctx.accounts.payer.to_account_info(),
+            ctx.accounts.vault.to_account_info(),
+            ctx.accounts.system_program.to_account_info(),
+        ],
+        &[&vault_seeds],
+    )?;
+
+    // Initialize the token account with extensions
+    // For Token 2022, extensions are automatically handled based on the mint's configuration
+    // If the mint has confidential transfer extension, the account will be initialized with it
+    let authority_seeds = [
+        b"vault_authority".as_ref(),
+        &[vault_authority_bump],
+    ];
+    let signer_seeds = &[&authority_seeds[..]];
+
+    let initialize_ctx = CpiContext::new_with_signer(
+        ctx.accounts.vault_token_program.to_account_info(),
+        InitializeAccount3 {
+            account: ctx.accounts.vault.to_account_info(),
+            mint: ctx.accounts.vault_mint.to_account_info(),
+            authority: ctx.accounts.vault_authority.to_account_info(),
+        },
+        signer_seeds,
+    );
+
+    // Initialize account with extensions
+    // The token program will automatically handle extensions based on mint configuration
+    // For confidential transfer extension, the account must have the correct size (179 bytes = 165 + 14)
+    // and the mint must have confidential transfer extension enabled
+    initialize_account3(initialize_ctx)?;
+
+    // Note: initialize_account3 automatically initializes extensions based on mint configuration.
+    // If the mint has confidential transfer extension, the account extension will be initialized.
+    // This is sufficient for standard token transfers (transfer_checked) used in swap operations.
+    // InitializeConfidentialTransferAccount is only needed if you want to use confidential transfer
+    // functionality (encrypted amounts), but it's NOT required for regular swaps to work.
+
+    msg!(
+        "Successfully created vault with extensions: {} for mint: {} (space: {} bytes)",
+        ctx.accounts.vault.key(),
+        ctx.accounts.vault_mint.key(),
+        total_size
+    );
     Ok(())
 }

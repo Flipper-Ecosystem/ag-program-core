@@ -1,18 +1,20 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program, BN } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram, Transaction } from "@solana/web3.js";
+import { PublicKey, Keypair, SystemProgram, Transaction, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
     TOKEN_PROGRAM_ID,
+    TOKEN_2022_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
     createMint,
     mintTo,
     getAssociatedTokenAddressSync,
     createAssociatedTokenAccount,
     getAccount,
-    getOrCreateAssociatedTokenAccount
+    getOrCreateAssociatedTokenAccount,
 } from "@solana/spl-token";
 import { assert } from "chai";
 import { Flipper } from "../target/types/flipper";
+
 
 describe("Flipper Swap Protocol - Whirlpools Swap and Limit Orders", () => {
     const provider = anchor.AnchorProvider.env();
@@ -278,10 +280,7 @@ describe("Flipper Swap Protocol - Whirlpools Swap and Limit Orders", () => {
     });
 
     it("1. Single-hop swap with Whirlpool adapter (with supplemental tick arrays)", async () => {
-        // ФИКСИРУЕМ направление: всегда свапаем A->B (aToB = true)
-        // Для этого sourceMint должен быть меньше intermediateMint
 
-        // Пересоздаем минты если нужно, чтобы sourceMint < intermediateMint
         let actualSourceMint = sourceMint;
         let actualIntermediateMint = intermediateMint;
         let actualInputVault = inputVault;
@@ -289,7 +288,7 @@ describe("Flipper Swap Protocol - Whirlpools Swap and Limit Orders", () => {
         let actualUserSourceTokenAccount = userSourceTokenAccount;
         let actualUserIntermediateTokenAccount = userIntermediateTokenAccount;
 
-        // Если порядок неправильный, меняем местами
+
         if (sourceMint.toString() > intermediateMint.toString()) {
             //console.log("Swapping source and intermediate to ensure A->B direction");
             actualSourceMint = intermediateMint;
@@ -606,7 +605,7 @@ describe("Flipper Swap Protocol - Whirlpools Swap and Limit Orders", () => {
             { pubkey: tickArray0, isWritable: true, isSigner: false },           // 12: tick_array_0
             { pubkey: tickArray1, isWritable: true, isSigner: false },           // 13: tick_array_1
             { pubkey: tickArray2, isWritable: true, isSigner: false },           // 14: tick_array_2
-            { pubkey: whirlpoolOracle, isWritable: false, isSigner: false },     // 15: oracle
+            { pubkey: whirlpoolOracle, isWritable: true, isSigner: false },     // 15: oracle
             { pubkey: supplementalTickArray0, isWritable: true, isSigner: false }, // 16
             { pubkey: supplementalTickArray1, isWritable: true, isSigner: false }, // 17
             { pubkey: supplementalTickArray2, isWritable: true, isSigner: false }, // 18

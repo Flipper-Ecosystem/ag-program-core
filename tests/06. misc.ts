@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program, BN } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram, Transaction } from "@solana/web3.js";
+import { PublicKey, Keypair, SystemProgram, Transaction, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import {
     TOKEN_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -468,10 +468,27 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             program.programId
         );
 
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
             [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
+
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .initLimitOrder(nonce, 0)
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         const initialBalance = (await getAccount(provider.connection, userSourceTokenAccount)).amount;
 
@@ -534,10 +551,27 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             program.programId
         );
 
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
             [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
+
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .initLimitOrder(nonce, 0)
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         await program.methods
             .createLimitOrder(
@@ -645,10 +679,27 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             program.programId
         );
 
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
             [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
+
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .initLimitOrder(nonce, 0)
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         await program.methods
             .createLimitOrder(
@@ -717,10 +768,27 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             program.programId
         );
 
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
             [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
+
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .initLimitOrder(orderNonce, 0)
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                inputMint: destinationMint, // For route_and_create_order, vault holds output_mint tokens
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         const routePlan = [
             { swap: { raydium: {} }, percent: 100, inputIndex: 0, outputIndex: 13 }
@@ -891,10 +959,27 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             program.programId
         );
 
+        // Vault now uses limit_order.key() as seed
         const [orderVault] = PublicKey.findProgramAddressSync(
             [Buffer.from("order_vault"), limitOrder.toBuffer()],
             program.programId
         );
+
+        // Initialize limit order and vault first (for standard tokens, account_space = 0)
+        await program.methods
+            .initLimitOrder(nonce, 0)
+            .accounts({
+                vaultAuthority,
+                limitOrder,
+                inputVault: orderVault,
+                inputMint: sourceMint,
+                inputTokenProgram: TOKEN_PROGRAM_ID,
+                creator: user.publicKey,
+                systemProgram: SystemProgram.programId,
+                rent: SYSVAR_RENT_PUBKEY,
+            })
+            .signers([user])
+            .rpc();
 
         await program.methods
             .createLimitOrder(
@@ -924,13 +1009,14 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
 
         // For StopLoss: price_ratio <= 10000 - trigger_price_bps (9500)
         // price_ratio = (quotedOutAmount * 10000) / minOutputAmount
-        // So: quotedOutAmount <= 9500 * minOutputAmount / 10000 = 9500 * 30_000_000 / 10000 = 28_500_000
+        // So: quotedOutAmount <= 9500 * minOutputAmount / 10000 = 9500 * 33_000_000 / 10000 = 31_350_000
         // But we also need to account for slippage check AFTER fees
         // With slippage_bps = 300 (3%): min_acceptable = quotedOutAmount * 9700 / 10000
         // With platformFeeBps = 10 (0.1%): after fee = output_amount * 9990 / 10000
         // Need: output_amount * 9990 / 10000 >= quotedOutAmount * 9700 / 10000
         // So: output_amount >= quotedOutAmount * 9700 / 9990
         // Use a value that satisfies trigger AND slippage after fees
+        // Note: The actual output from swap must also satisfy the StopLoss condition
         const quotedOutAmount = new BN(26_000_000); // Lower value to ensure trigger condition, but still enough for slippage after fees
         const platformFeeBps = 10;
 
@@ -1053,6 +1139,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 program.programId
             );
 
+            // Vault now uses limit_order.key() as seed
             const [orderVault] = PublicKey.findProgramAddressSync(
                 [Buffer.from("order_vault"), limitOrder.toBuffer()],
                 program.programId
@@ -1164,7 +1251,80 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             );*/
         });
 
-        it("7.2. Cancel limit order - verify account is closed and creator receives rent", async () => {
+        it("7.2. Cancel limit order (Init status) - verify account is closed and creator receives rent", async () => {
+            const nonce = new BN(Date.now() + 2000000); // Ensure unique nonce
+
+            const [limitOrder] = PublicKey.findProgramAddressSync(
+                [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+                program.programId
+            );
+
+            // Vault now uses limit_order.key() as seed
+            const [orderVault] = PublicKey.findProgramAddressSync(
+                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                program.programId
+            );
+
+            // Initialize limit order and vault first (for standard tokens, account_space = 0)
+            // This creates an order in Init status (not yet filled with createLimitOrder)
+            await program.methods
+                .initLimitOrder(nonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
+
+            // Verify order is in Init status
+            const orderAccountBefore = await program.account.limitOrder.fetch(limitOrder);
+            assert.equal(orderAccountBefore.status.init !== undefined, true, "Order should be in Init status");
+
+            // Verify vault is empty
+            const vaultAccount = await getAccount(provider.connection, orderVault);
+            assert.equal(vaultAccount.amount.toString(), "0", "Vault should be empty for Init order");
+
+            // Get initial creator balance
+            const initialCreatorBalance = await provider.connection.getBalance(user.publicKey);
+
+            // Creator can cancel Init order
+            await program.methods
+                .cancelLimitOrder()
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    userInputTokenAccount: userSourceTokenAccount,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                })
+                .signers([user])
+                .rpc();
+
+            // Verify order account is now closed
+            const orderAccountInfoAfterCancel = await provider.connection.getAccountInfo(limitOrder);
+            assert.equal(orderAccountInfoAfterCancel, null, "Order account should be closed after cancel");
+
+            // Verify vault is closed
+            const vaultAccountInfo = await provider.connection.getAccountInfo(orderVault);
+            assert.equal(vaultAccountInfo, null, "Vault should be closed");
+
+            // Verify creator received rent
+            const finalCreatorBalance = await provider.connection.getBalance(user.publicKey);
+            assert(
+                finalCreatorBalance > initialCreatorBalance,
+                "Creator should receive rent from closed order account"
+            );
+        });
+
+        it("7.2.1. Cancel limit order (Open status) - verify account is closed and creator receives rent", async () => {
             const nonce = new BN(Date.now());
             const inputAmount = new BN(50_000_000);
             const minOutputAmount = new BN(45_000_000);
@@ -1178,10 +1338,27 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 program.programId
             );
 
+            // Vault now uses limit_order.key() as seed
             const [orderVault] = PublicKey.findProgramAddressSync(
                 [Buffer.from("order_vault"), limitOrder.toBuffer()],
                 program.programId
             );
+
+            // Initialize limit order and vault first (for standard tokens, account_space = 0)
+            await program.methods
+                .initLimitOrder(nonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
 
             await program.methods
                 .createLimitOrder(
@@ -1243,6 +1420,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             );
         });
 
+
         it("7.3. Cancel expired limit order by operator - verify rent goes to operator and tokens to creator", async () => {
             const nonce = new BN(Date.now());
             const inputAmount = new BN(50_000_000);
@@ -1258,6 +1436,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 program.programId
             );
 
+            // Vault now uses limit_order.key() as seed
             const [orderVault] = PublicKey.findProgramAddressSync(
                 [Buffer.from("order_vault"), limitOrder.toBuffer()],
                 program.programId
@@ -1269,6 +1448,22 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             // For testing, let's create with a very short expiry and wait, or better yet, create with future expiry
             // and then use cancel_expired_limit_order_by_operator which checks expiry
             
+            // Initialize limit order and vault first (for standard tokens, account_space = 0)
+            await program.methods
+                .initLimitOrder(nonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
+
             // Create order with future expiry first
             const futureExpiry = new BN(Math.floor(Date.now() / 1000) + 3600);
             await program.methods
@@ -1352,10 +1547,27 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 program.programId
             );
 
+            // Vault now uses limit_order.key() as seed
             const [expiredOrderVault] = PublicKey.findProgramAddressSync(
                 [Buffer.from("order_vault"), expiredLimitOrder.toBuffer()],
                 program.programId
             );
+
+            // Initialize limit order and vault first (for standard tokens, account_space = 0)
+            await program.methods
+                .initLimitOrder(expiredNonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    limitOrder: expiredLimitOrder,
+                    inputVault: expiredOrderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
 
             // Create order with 1 second expiry
             const shortExpiry = new BN(Math.floor(Date.now() / 1000) + 1);
@@ -1429,7 +1641,80 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             );
         });
 
-        it("7.4. Close limit order by operator - should fail for open order", async () => {
+        it("7.3.1. Close limit order by operator - should succeed for Init order", async () => {
+            const nonce = new BN(Date.now() + 1000000); // Ensure unique nonce
+
+            const [limitOrder] = PublicKey.findProgramAddressSync(
+                [Buffer.from("limit_order"), user.publicKey.toBuffer(), nonce.toArrayLike(Buffer, 'le', 8)],
+                program.programId
+            );
+
+            // Vault now uses limit_order.key() as seed
+            const [orderVault] = PublicKey.findProgramAddressSync(
+                [Buffer.from("order_vault"), limitOrder.toBuffer()],
+                program.programId
+            );
+
+            // Initialize limit order and vault first (for standard tokens, account_space = 0)
+            // This creates an order in Init status (not yet filled with createLimitOrder)
+            await program.methods
+                .initLimitOrder(nonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
+
+            // Verify order is in Init status
+            const orderAccount = await program.account.limitOrder.fetch(limitOrder);
+            assert.equal(orderAccount.status.init !== undefined, true, "Order should be in Init status");
+
+            // Verify vault is empty
+            const vaultAccount = await getAccount(provider.connection, orderVault);
+            assert.equal(vaultAccount.amount.toString(), "0", "Vault should be empty for Init order");
+
+            // Get initial operator balance
+            const initialOperatorBalance = await provider.connection.getBalance(operator.publicKey);
+
+            // Operator can close Init order
+            await program.methods
+                .closeLimitOrderByOperator()
+                .accounts({
+                    adapterRegistry,
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    operator: operator.publicKey,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([operator])
+                .rpc();
+
+            // Verify order account is closed
+            const orderAccountInfo = await provider.connection.getAccountInfo(limitOrder);
+            assert.equal(orderAccountInfo, null, "Order account should be closed");
+
+            // Verify vault is closed
+            const vaultAccountInfo = await provider.connection.getAccountInfo(orderVault);
+            assert.equal(vaultAccountInfo, null, "Vault should be closed");
+
+            // Verify operator received rent
+            const finalOperatorBalance = await provider.connection.getBalance(operator.publicKey);
+            assert(
+                finalOperatorBalance > initialOperatorBalance,
+                "Operator should receive rent from closed order and vault accounts"
+            );
+        });
+
+        it("7.4. Close limit order by operator - should fail for Open order (only Init/Filled/Cancelled allowed)", async () => {
             const nonce = new BN(Date.now());
             const inputAmount = new BN(50_000_000);
             const minOutputAmount = new BN(45_000_000);
@@ -1443,10 +1728,27 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 program.programId
             );
 
+            // Vault now uses limit_order.key() as seed
             const [orderVault] = PublicKey.findProgramAddressSync(
                 [Buffer.from("order_vault"), limitOrder.toBuffer()],
                 program.programId
             );
+
+            // Initialize limit order and vault first (for standard tokens, account_space = 0)
+            await program.methods
+                .initLimitOrder(nonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
 
             await program.methods
                 .createLimitOrder(
@@ -1498,7 +1800,7 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
             }
         });
 
-        it("7.5. Close limit order by operator - should fail for non-operator", async () => {
+        it("7.5. Close limit order by operator - should fail for non-operator (InvalidOperator)", async () => {
             const nonce = new BN(Date.now());
             const inputAmount = new BN(50_000_000);
             const minOutputAmount = new BN(45_000_000);
@@ -1512,10 +1814,27 @@ describe("Flipper Swap Protocol - End to End Tests for Swaps and Limit Orders wi
                 program.programId
             );
 
+            // Vault now uses limit_order.key() as seed
             const [orderVault] = PublicKey.findProgramAddressSync(
                 [Buffer.from("order_vault"), limitOrder.toBuffer()],
                 program.programId
             );
+
+            // Initialize limit order and vault first (for standard tokens, account_space = 0)
+            await program.methods
+                .initLimitOrder(nonce, 0)
+                .accounts({
+                    vaultAuthority,
+                    limitOrder,
+                    inputVault: orderVault,
+                    inputMint: sourceMint,
+                    inputTokenProgram: TOKEN_PROGRAM_ID,
+                    creator: user.publicKey,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .signers([user])
+                .rpc();
 
             await program.methods
                 .createLimitOrder(
