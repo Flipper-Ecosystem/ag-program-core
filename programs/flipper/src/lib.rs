@@ -82,6 +82,17 @@ pub mod flipper {
         instructions::create_vault_authority(ctx)
     }
 
+    /// Migrates the vault authority to expand account data for jupiter_program_id field.
+    /// Must be called once after upgrading. Callable by admin or operator.
+    pub fn migrate_vault_authority(ctx: Context<MigrateVaultAuthority>, jupiter_program_id: Pubkey) -> Result<()> {
+        instructions::migrate_vault_authority(ctx, jupiter_program_id)
+    }
+
+    /// Sets the Jupiter program ID in the vault authority. Global manager only.
+    pub fn set_jupiter_program(ctx: Context<SetJupiterProgram>, jupiter_program_id: Pubkey) -> Result<()> {
+        instructions::set_jupiter_program(ctx, jupiter_program_id)
+    }
+
     pub fn create_vault(ctx: Context<CreateVault>) -> Result<()> {
         instructions::create_vault(ctx)
     }

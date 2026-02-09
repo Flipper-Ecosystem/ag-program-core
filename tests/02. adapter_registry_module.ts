@@ -271,12 +271,34 @@ describe("Flipper Swap Protocol - Adapter Registry Module", () => {
         );
         const currentAuthorityPubkey = registryAccount.authority;
 
-        // Use the current authority for reset
-        const authorityToUse = currentAuthorityPubkey.equals(
-          initialAuthority.publicKey
-        )
-          ? initialAuthority
-          : currentAuthority;
+        // Determine which signer to use based on the on-chain authority
+        let authorityToUse: Keypair;
+        const wallet = provider.wallet as anchor.Wallet;
+        if (currentAuthorityPubkey.equals(initialAuthority.publicKey)) {
+          authorityToUse = initialAuthority;
+        } else if (currentAuthorityPubkey.equals(currentAuthority.publicKey)) {
+          authorityToUse = currentAuthority;
+        } else if (currentAuthorityPubkey.equals(wallet.publicKey)) {
+          authorityToUse = wallet.payer;
+        } else {
+          throw new Error(
+            `Unknown on-chain authority: ${currentAuthorityPubkey.toBase58()}`
+          );
+        }
+
+        // Transfer authority to our initialAuthority first, then reset
+        if (!currentAuthorityPubkey.equals(initialAuthority.publicKey)) {
+          await program.methods
+            .changeAuthority()
+            .accounts({
+              adapterRegistry,
+              authority: currentAuthorityPubkey,
+              newAuthority: initialAuthority.publicKey,
+            })
+            .signers([authorityToUse])
+            .rpc();
+          currentAuthority = initialAuthority;
+        }
 
         // Reset adapter registry state
         await program.methods
@@ -297,9 +319,9 @@ describe("Flipper Swap Protocol - Adapter Registry Module", () => {
           )
           .accounts({
             adapterRegistry,
-            authority: currentAuthorityPubkey,
+            authority: initialAuthority.publicKey,
           })
-          .signers([authorityToUse])
+          .signers([initialAuthority])
           .rpc();
       }
     } catch (error) {
@@ -308,6 +330,67 @@ describe("Flipper Swap Protocol - Adapter Registry Module", () => {
         console.error("Transaction failed in beforeEach hook. Logs:", logs);
       }
       throw error;
+    }
+  });
+
+  after(async () => {
+    // Restore adapter registry to a state that downstream tests can use.
+    // After all beforeEach resets, authority is initialAuthority (test-local keypair).
+    // We need to transfer authority back to wallet so tests 03-06 can add operators.
+    try {
+      const registryAccount = await program.account.adapterRegistry.fetch(
+        adapterRegistry
+      );
+      const currentAuthorityPubkey = registryAccount.authority;
+      const wallet = provider.wallet as anchor.Wallet;
+
+      if (!currentAuthorityPubkey.equals(wallet.publicKey)) {
+        let signer: Keypair;
+        if (currentAuthorityPubkey.equals(initialAuthority.publicKey)) {
+          signer = initialAuthority;
+        } else if (currentAuthorityPubkey.equals(currentAuthority.publicKey)) {
+          signer = currentAuthority;
+        } else {
+          console.warn(
+            "Cannot restore adapter registry authority - unknown authority"
+          );
+          return;
+        }
+
+        // Transfer authority back to wallet
+        await program.methods
+          .changeAuthority()
+          .accounts({
+            adapterRegistry,
+            authority: currentAuthorityPubkey,
+            newAuthority: wallet.publicKey,
+          })
+          .signers([signer])
+          .rpc();
+      }
+
+      // Ensure wallet is an operator so downstream tests can configure adapters
+      const updatedRegistry = await program.account.adapterRegistry.fetch(
+        adapterRegistry
+      );
+      const walletIsOperator = updatedRegistry.operators.some((op) =>
+        op.equals(wallet.publicKey)
+      );
+      if (!walletIsOperator) {
+        await program.methods
+          .addOperator(wallet.publicKey)
+          .accounts({
+            adapterRegistry,
+            authority: wallet.publicKey,
+          })
+          .signers([wallet.payer])
+          .rpc();
+      }
+    } catch (error) {
+      console.warn(
+        "Warning: Could not restore adapter registry state:",
+        error.message
+      );
     }
   });
 

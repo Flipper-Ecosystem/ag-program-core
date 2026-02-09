@@ -140,4 +140,7 @@ pub enum ErrorCode {
 
     #[msg("Not enough Jupiter accounts in remaining_accounts")]
     NotEnoughJupiterAccounts,
+
+    #[msg("Invalid Jupiter program ID")]
+    InvalidJupiterProgram,
 }

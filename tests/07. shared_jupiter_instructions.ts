@@ -205,6 +205,34 @@ describe("Flipper - Shared Jupiter CPI Instructions", () => {
       console.log("✅ Initialized adapter registry with operator");
     }
 
+    // Set Jupiter program ID using migrateVaultAuthority (callable by admin only).
+    // This handles both realloc (if needed) and setting jupiter_program_id.
+    // Realloc to same size is a no-op in Anchor, so safe to call even if already migrated.
+    const vaultAuthorityData = await program.account.vaultAuthority.fetch(
+      vaultAuthority
+    );
+    if (
+      !vaultAuthorityData.jupiterProgramId ||
+      !vaultAuthorityData.jupiterProgramId.equals(mockJupiterProgram.programId)
+    ) {
+      await program.methods
+        .migrateVaultAuthority(mockJupiterProgram.programId)
+        .accounts({
+          vaultAuthority,
+          admin: admin.publicKey,
+          payer: wallet.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([wallet.payer])
+        .rpc();
+      console.log(
+        "✅ Set Jupiter program via migrateVaultAuthority:",
+        mockJupiterProgram.programId.toBase58()
+      );
+    } else {
+      console.log("✅ Jupiter program ID already set correctly");
+    }
+
     // Create mints
     sourceMint = await createMint(
       provider.connection,
@@ -537,6 +565,57 @@ describe("Flipper - Shared Jupiter CPI Instructions", () => {
       );
 
       console.log("✅ Verified: User received output tokens directly");
+    });
+  });
+
+  describe("shared_route - invalid Jupiter program", () => {
+    it("Should reject a swap with an invalid Jupiter program ID", async () => {
+      const fakeJupiterProgram = Keypair.generate().publicKey;
+
+      try {
+        await program.methods
+          .sharedRoute(
+            new BN(100_000_000),
+            new BN(150_000_000),
+            50,
+            0,
+            Buffer.alloc(8)
+          )
+          .accounts({
+            vaultAuthority,
+            userSourceTokenAccount,
+            userDestinationTokenAccount,
+            vaultSource: sourceVault,
+            vaultDestination: destinationVault,
+            sourceMint,
+            destinationMint,
+            inputTokenProgram: TOKEN_PROGRAM_ID,
+            outputTokenProgram: TOKEN_PROGRAM_ID,
+            userTransferAuthority: user.publicKey,
+            platformFeeAccount: null,
+            jupiterProgram: fakeJupiterProgram,
+            systemProgram: SystemProgram.programId,
+          })
+          .remainingAccounts([])
+          .signers([user])
+          .rpc();
+
+        assert.fail("Should have failed with InvalidJupiterProgram");
+      } catch (err: any) {
+        const errorStr = err.toString();
+        const hasInvalidJupiterProgram =
+          errorStr.includes("InvalidJupiterProgram") ||
+          errorStr.includes("Invalid Jupiter program ID") ||
+          (err.error &&
+            err.error.errorCode &&
+            err.error.errorCode.code === "InvalidJupiterProgram");
+
+        assert.isTrue(
+          hasInvalidJupiterProgram,
+          `Expected InvalidJupiterProgram error, got: ${errorStr}`
+        );
+        console.log("✅ Correctly rejected invalid Jupiter program ID");
+      }
     });
   });
 

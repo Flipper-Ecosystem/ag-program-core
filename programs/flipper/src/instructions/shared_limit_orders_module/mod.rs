@@ -130,6 +130,13 @@ pub fn shared_execute_limit_order<'info>(
     require!(in_amount > 0, ErrorCode::InvalidAmount);
     require!(quoted_out_amount > 0, ErrorCode::InvalidAmount);
     require!(!data.is_empty(), ErrorCode::EmptyRoute);
+
+    // Validate Jupiter program matches the one stored in vault_authority
+    require!(
+        ctx.accounts.jupiter_program.key() == ctx.accounts.vault_authority.jupiter_program_id,
+        ErrorCode::InvalidJupiterProgram
+    );
+
     require!(
         ctx.remaining_accounts.len() >= JUPITER_MIN_ACCOUNTS,
         ErrorCode::NotEnoughJupiterAccounts

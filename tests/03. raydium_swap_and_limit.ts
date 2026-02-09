@@ -255,27 +255,38 @@ describe("Flipper Swap Protocol - Raydium Swap and Limit Orders", () => {
     } else {
       //console.log("✓ Adapter registry already exists, reusing");
 
-      // If registry exists, we might need to add wallet as operator
+      // Ensure wallet and operator are registered as operators
       try {
         const registryAccount = await program.account.adapterRegistry.fetch(
           adapterRegistry
         );
-        const isOperator = registryAccount.operators.some((op: PublicKey) =>
-          op.equals(wallet.publicKey)
+        const walletIsOperator = registryAccount.operators.some(
+          (op: PublicKey) => op.equals(wallet.publicKey)
+        );
+        const operatorIsRegistered = registryAccount.operators.some(
+          (op: PublicKey) => op.equals(operator.publicKey)
         );
 
-        if (!isOperator) {
-          //console.log("⚠ Wallet is not an operator, attempting to add...");
-          // Try to add wallet as operator using another existing operator
+        if (!walletIsOperator) {
+          await program.methods
+            .addOperator(wallet.publicKey)
+            .accounts({
+              adapterRegistry,
+              authority: registryAccount.authority,
+            })
+            .signers([wallet.payer])
+            .rpc();
+        }
+
+        if (!operatorIsRegistered) {
           await program.methods
             .addOperator(operator.publicKey)
             .accounts({
               adapterRegistry,
-              authority: wallet.publicKey, // This might fail if wallet isn't already an operator
+              authority: registryAccount.authority,
             })
             .signers([wallet.payer])
             .rpc();
-          //console.log("✓ Wallet added as operator");
         }
       } catch (e) {
         //console.log("Note: Could not verify/add operator status:", e.message);

@@ -15,6 +15,7 @@ mod vault_manager_test;
 pub struct VaultAuthority {
     pub admin: Pubkey,
     pub bump: u8,
+    pub jupiter_program_id: Pubkey,
 }
 
 #[account]
@@ -28,7 +29,7 @@ pub struct CreateVaultAuthority<'info> {
     #[account(
         init,
         payer = payer,
-        space = 8 + 32 + 1,
+        space = 8 + 32 + 1 + 32,
         seeds = [b"vault_authority"],
         bump
     )]
@@ -46,6 +47,7 @@ pub fn create_vault_authority(ctx: Context<CreateVaultAuthority>) -> Result<()> 
     let vault_authority = &mut ctx.accounts.vault_authority;
     vault_authority.admin = ctx.accounts.admin.key();
     vault_authority.bump = ctx.bumps.vault_authority;
+    vault_authority.jupiter_program_id = Pubkey::default();
 
     msg!("Created vault authority: {}", vault_authority.key());
     Ok(())
@@ -302,6 +304,62 @@ pub fn change_vault_authority_admin(ctx: Context<ChangeVaultAuthorityAdmin>) -> 
          old_admin, 
          vault_authority.admin,
          ctx.accounts.manager.key());
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct MigrateVaultAuthority<'info> {
+    #[account(
+        mut,
+        realloc = 8 + 32 + 1 + 32,
+        realloc::payer = payer,
+        realloc::zero = false,
+        seeds = [b"vault_authority"],
+        bump,
+        constraint = vault_authority.admin == admin.key() @ ErrorCode::UnauthorizedAdmin
+    )]
+    pub vault_authority: Account<'info, VaultAuthority>,
+
+    pub admin: Signer<'info>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+pub fn migrate_vault_authority(ctx: Context<MigrateVaultAuthority>, jupiter_program_id: Pubkey) -> Result<()> {
+    let vault_authority = &mut ctx.accounts.vault_authority;
+    vault_authority.bump = ctx.bumps.vault_authority;
+    vault_authority.jupiter_program_id = jupiter_program_id;
+    msg!("Migrated vault authority. Jupiter program: {}", jupiter_program_id);
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct SetJupiterProgram<'info> {
+    #[account(
+        mut,
+        seeds = [b"vault_authority"],
+        bump = vault_authority.bump,
+        constraint = vault_authority.admin != Pubkey::default() @ ErrorCode::VaultAuthorityNotInitialized,
+    )]
+    pub vault_authority: Account<'info, VaultAuthority>,
+
+    #[account(
+        seeds = [b"global_manager"],
+        bump = global_manager.bump,
+        constraint = global_manager.manager != Pubkey::default() @ ErrorCode::GlobalManagerNotInitialized,
+        constraint = global_manager.manager == manager.key() @ ErrorCode::UnauthorizedGlobalManager
+    )]
+    pub global_manager: Account<'info, GlobalManager>,
+
+    pub manager: Signer<'info>,
+}
+
+pub fn set_jupiter_program(ctx: Context<SetJupiterProgram>, jupiter_program_id: Pubkey) -> Result<()> {
+    ctx.accounts.vault_authority.jupiter_program_id = jupiter_program_id;
+    msg!("Set Jupiter program ID: {}", jupiter_program_id);
     Ok(())
 }
 

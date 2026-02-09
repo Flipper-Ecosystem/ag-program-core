@@ -66,10 +66,12 @@ mod tests {
         let vault_authority = VaultAuthority {
             admin: Pubkey::new_unique(),
             bump: 255,
+            jupiter_program_id: Pubkey::default(),
         };
 
         assert_ne!(vault_authority.admin, Pubkey::default());
         assert_eq!(vault_authority.bump, 255);
+        assert_eq!(vault_authority.jupiter_program_id, Pubkey::default());
     }
 
     #[test]
@@ -77,6 +79,7 @@ mod tests {
         let vault_authority = VaultAuthority {
             admin: Pubkey::default(),
             bump: 128,
+            jupiter_program_id: Pubkey::default(),
         };
 
         assert_eq!(vault_authority.admin, Pubkey::default());
