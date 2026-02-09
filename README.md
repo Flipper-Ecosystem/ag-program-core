@@ -1,3 +1,5 @@
+[![CI](https://github.com/Flipper-Ecosystem/ag-program-core/actions/workflows/ci.yml/badge.svg)](https://github.com/Flipper-Ecosystem/ag-program-core/actions/workflows/ci.yml)
+
 ## Installation
 
 ### Prerequisites
@@ -230,3 +232,62 @@ If the on-chain method doesn't work, you can manually upload the IDL:
 
 **Note**: Make sure to run `anchor build` first to generate the latest IDL file before uploading.
 
+---
+
+## Mainnet Scripts and Operator Management
+
+The project includes comprehensive scripts for managing operators and Address Lookup Tables (ALT) on mainnet.
+
+### Available Scripts
+
+#### 1. Interactive ALT Manager
+Use the interactive bash script for easy access to all ALT and operator management functions:
+```bash
+./scripts/mainnet/alt_manager.sh
+```
+
+This provides a user-friendly menu interface for:
+- Viewing and managing Address Lookup Tables
+- Adding, removing, and replacing operators
+- Transferring ALT authority to new operators
+
+#### 2. Command-line Scripts
+For automation and CI/CD, use the TypeScript scripts directly:
+
+**Address Lookup Tables:**
+```bash
+# List all ALT owned by current authority
+npx ts-node scripts/mainnet/list_alt.ts
+
+# Transfer all ALT to new authority
+NEW_AUTHORITY_PUBKEY=<address> npx ts-node scripts/mainnet/transfer_alt_authority.ts
+
+# Transfer specific ALT
+NEW_AUTHORITY_PUBKEY=<address> ALT_ADDRESSES=<addr1,addr2> \
+  npx ts-node scripts/mainnet/transfer_alt_authority_specific.ts
+```
+
+**Operator Management:**
+```bash
+# Add operator
+OPERATOR_PUBKEY=<address> npx ts-node scripts/mainnet/add_operator.ts
+
+# Remove operator
+OPERATOR_PUBKEY=<address> npx ts-node scripts/mainnet/remove_operator.ts
+
+# Replace operator
+OLD_OPERATOR_PUBKEY=<old> NEW_OPERATOR_PUBKEY=<new> \
+  npx ts-node scripts/mainnet/replace_operator.ts
+```
+
+### Documentation
+
+For detailed documentation, examples, and troubleshooting:
+- **Detailed Guide**: See [scripts/mainnet/README_OPERATORS.md](scripts/mainnet/README_OPERATORS.md)
+- **Quick Reference**: See [scripts/mainnet/QUICK_REFERENCE.md](scripts/mainnet/QUICK_REFERENCE.md)
+
+### Prerequisites for Mainnet Scripts
+
+- Authority keypair file at: `~/.config/solana/fpp-staging.json`
+- Sufficient SOL balance for transactions
+- Node.js and npm/npx installed

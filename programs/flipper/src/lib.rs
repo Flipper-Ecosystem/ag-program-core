@@ -6,6 +6,12 @@ pub mod instructions;
 pub mod errors;
 pub mod state;
 
+// Test modules
+#[cfg(test)]
+mod state_test;
+#[cfg(test)]
+mod errors_test;
+
 declare_id!("fLpRcgQSJxKeeUogb6M7bWe1iyYQbahjGXGwr4HgHit");
 
 #[program]
@@ -15,7 +21,9 @@ pub mod flipper {
         adapter_registry_module::*,
         swap_processor_module::*,
         vault_manager_module::*,
-        limit_orders_module::*
+        limit_orders_module::*,
+        shared_route_module::*,
+        shared_limit_orders_module::*
     };
     pub use errors::ErrorCode;
     pub use state::{
@@ -64,6 +72,11 @@ pub mod flipper {
         instructions::reset_adapter_registry(ctx, adapters, operators)
     }
 
+    /// Migrates the adapter registry to write the PDA bump into the account data.
+    /// Must be called once after upgrading from a version that did not store bump.
+    pub fn migrate_adapter_registry(ctx: Context<MigrateAdapterRegistry>) -> Result<()> {
+        instructions::migrate_adapter_registry(ctx)
+    }
 
     pub fn create_vault_authority(ctx: Context<CreateVaultAuthority>) -> Result<()> {
         instructions::create_vault_authority(ctx)
@@ -91,6 +104,14 @@ pub mod flipper {
 
     pub fn withdraw_platform_fees(ctx: Context<WithdrawPlatformFees>, amount: u64) -> Result<()> {
         instructions::withdraw_platform_fees(ctx, amount)
+    }
+
+    pub fn create_global_manager(ctx: Context<CreateGlobalManager>) -> Result<()> {
+        instructions::create_global_manager(ctx)
+    }
+
+    pub fn change_global_manager(ctx: Context<ChangeGlobalManager>) -> Result<()> {
+        instructions::change_global_manager(ctx)
     }
 
     pub fn route<'info>(
@@ -204,5 +225,58 @@ pub mod flipper {
         account_space: u16,
     ) -> Result<()> {
         instructions::init_limit_order(ctx, nonce, account_space)
+    }
+
+    // ===== SHARED INSTRUCTIONS (Jupiter CPI Integration) =====
+
+    /// Shared route: Jupiter CPI via shared_accounts_route. Same params as route: quoted_out_amount, slippage_bps.
+    pub fn shared_route<'info>(
+        ctx: Context<'_, '_, 'info, 'info, SharedRoute<'info>>,
+        in_amount: u64,
+        quoted_out_amount: u64,
+        slippage_bps: u16,
+        platform_fee_bps: u8,
+        data: Vec<u8>,
+    ) -> Result<u64> {
+        instructions::shared_route(ctx, in_amount, quoted_out_amount, slippage_bps, platform_fee_bps, data)
+    }
+
+    /// Executes a limit order using Jupiter CPI (data + remaining_accounts).
+    pub fn shared_execute_limit_order<'info>(
+        ctx: Context<'_, '_, 'info, 'info, SharedExecuteLimitOrder<'info>>,
+        quoted_out_amount: u64,
+        platform_fee_bps: u8,
+        data: Vec<u8>,
+    ) -> Result<u64> {
+        instructions::shared_execute_limit_order(ctx, quoted_out_amount, platform_fee_bps, data)
+    }
+
+    /// Jupiter CPI swap + limit order creation. Same swap params as route_and_create_order: quoted_out_amount, slippage_bps.
+    pub fn shared_route_and_create_order<'info>(
+        ctx: Context<'_, '_, 'info, 'info, SharedRouteAndCreateOrder<'info>>,
+        order_nonce: u64,
+        swap_in_amount: u64,
+        swap_quoted_out_amount: u64,
+        swap_slippage_bps: u16,
+        platform_fee_bps: u8,
+        order_min_output_amount: u64,
+        order_trigger_price_bps: u32,
+        order_expiry: i64,
+        order_slippage_bps: u16,
+        data: Vec<u8>,
+    ) -> Result<(u64, Pubkey)> {
+        instructions::shared_route_and_create_order(
+            ctx,
+            order_nonce,
+            swap_in_amount,
+            swap_quoted_out_amount,
+            swap_slippage_bps,
+            platform_fee_bps,
+            order_min_output_amount,
+            order_trigger_price_bps,
+            order_expiry,
+            order_slippage_bps,
+            data,
+        )
     }
 }

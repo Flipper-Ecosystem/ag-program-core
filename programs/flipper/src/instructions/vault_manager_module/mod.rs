@@ -7,9 +7,19 @@ use anchor_spl::token_interface::{
 use anchor_spl::token_2022::ID as TOKEN_2022_PROGRAM_ID;
 use crate::errors::ErrorCode;
 
+// Test modules
+#[cfg(test)]
+mod vault_manager_test;
+
 #[account]
 pub struct VaultAuthority {
     pub admin: Pubkey,
+    pub bump: u8,
+}
+
+#[account]
+pub struct GlobalManager {
+    pub manager: Pubkey,
     pub bump: u8,
 }
 
@@ -42,19 +52,52 @@ pub fn create_vault_authority(ctx: Context<CreateVaultAuthority>) -> Result<()> 
 }
 
 #[derive(Accounts)]
+pub struct CreateGlobalManager<'info> {
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + 32 + 1,
+        seeds = [b"global_manager"],
+        bump
+    )]
+    pub global_manager: Account<'info, GlobalManager>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    pub manager: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+pub fn create_global_manager(ctx: Context<CreateGlobalManager>) -> Result<()> {
+    let global_manager = &mut ctx.accounts.global_manager;
+    global_manager.manager = ctx.accounts.manager.key();
+    global_manager.bump = ctx.bumps.global_manager;
+
+    msg!("Created global manager: {}", global_manager.key());
+    Ok(())
+}
+
+#[derive(Accounts)]
 pub struct CreateVault<'info> {
     #[account(
         seeds = [b"vault_authority"],
         bump = vault_authority.bump,
         constraint = vault_authority.admin != Pubkey::default() @ ErrorCode::VaultAuthorityNotInitialized,
-        constraint = vault_authority.admin == admin.key() @ ErrorCode::UnauthorizedAdmin
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
+
+    #[account(
+        seeds = [b"adapter_registry"],
+        bump = adapter_registry.bump,
+    )]
+    pub adapter_registry: Account<'info, crate::state::AdapterRegistry>,
 
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    pub admin: Signer<'info>,
+    pub creator: Signer<'info>,
 
     #[account(
         init,
@@ -73,9 +116,20 @@ pub struct CreateVault<'info> {
 }
 
 pub fn create_vault(ctx: Context<CreateVault>) -> Result<()> {
-    msg!("Successfully created vault: {} for mint: {}",
+    let adapter_registry = &ctx.accounts.adapter_registry;
+    let creator = ctx.accounts.creator.key();
+    let vault_authority_admin = ctx.accounts.vault_authority.admin;
+
+    // Check if creator is vault authority admin or an operator
+    let is_authorized = creator == vault_authority_admin 
+        || adapter_registry.is_authorized_operator(&creator);
+
+    require!(is_authorized, ErrorCode::UnauthorizedVaultCreator);
+
+    msg!("Successfully created vault: {} for mint: {} by {}",
          ctx.accounts.vault.key(),
-         ctx.accounts.vault_mint.key());
+         ctx.accounts.vault_mint.key(),
+         creator);
     Ok(())
 }
 
@@ -85,9 +139,14 @@ pub struct CloseVault<'info> {
         seeds = [b"vault_authority"],
         bump = vault_authority.bump,
         constraint = vault_authority.admin != Pubkey::default() @ ErrorCode::VaultAuthorityNotInitialized,
-        constraint = vault_authority.admin == admin.key() @ ErrorCode::UnauthorizedAdmin
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
+
+    #[account(
+        seeds = [b"adapter_registry"],
+        bump = adapter_registry.bump,
+    )]
+    pub adapter_registry: Account<'info, crate::state::AdapterRegistry>,
 
     #[account(
         mut,
@@ -100,12 +159,22 @@ pub struct CloseVault<'info> {
     /// CHECK: validated by code
     pub destination: AccountInfo<'info>,
 
-    pub admin: Signer<'info>,
+    pub closer: Signer<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
 }
 
 pub fn close_vault(ctx: Context<CloseVault>) -> Result<()> {
+    let adapter_registry = &ctx.accounts.adapter_registry;
+    let closer = ctx.accounts.closer.key();
+    let vault_authority_admin = ctx.accounts.vault_authority.admin;
+
+    // Check if closer is vault authority admin or an operator
+    let is_authorized = closer == vault_authority_admin 
+        || adapter_registry.is_authorized_operator(&closer);
+
+    require!(is_authorized, ErrorCode::UnauthorizedVaultCreator);
+
     let vault_authority_bump = ctx.accounts.vault_authority.bump;
 
     let authority_seeds = [
@@ -126,12 +195,22 @@ pub fn close_vault(ctx: Context<CloseVault>) -> Result<()> {
 
     anchor_spl::token_interface::close_account(close_account_ctx)?;
 
-    msg!("Successfully closed vault: {}", ctx.accounts.vault.key());
+    msg!("Successfully closed vault: {} by {}", ctx.accounts.vault.key(), closer);
     Ok(())
 }
 
 pub fn initialize_vaults(ctx: Context<InitializeVaults>) -> Result<()> {
-    msg!("Vaults initialized successfully");
+    let adapter_registry = &ctx.accounts.adapter_registry;
+    let creator = ctx.accounts.creator.key();
+    let vault_authority_admin = ctx.accounts.vault_authority.admin;
+
+    // Check if creator is vault authority admin or an operator
+    let is_authorized = creator == vault_authority_admin 
+        || adapter_registry.is_authorized_operator(&creator);
+
+    require!(is_authorized, ErrorCode::UnauthorizedVaultCreator);
+
+    msg!("Vaults initialized successfully by {}", creator);
     Ok(())
 }
 
@@ -141,14 +220,19 @@ pub struct InitializeVaults<'info> {
         seeds = [b"vault_authority"],
         bump = vault_authority.bump,
         constraint = vault_authority.admin != Pubkey::default() @ ErrorCode::VaultAuthorityNotInitialized,
-        constraint = vault_authority.admin == admin.key() @ ErrorCode::UnauthorizedAdmin
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
+
+    #[account(
+        seeds = [b"adapter_registry"],
+        bump = adapter_registry.bump,
+    )]
+    pub adapter_registry: Account<'info, crate::state::AdapterRegistry>,
 
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    pub admin: Signer<'info>,
+    pub creator: Signer<'info>,
 
     #[account(
         init,
@@ -186,11 +270,18 @@ pub struct ChangeVaultAuthorityAdmin<'info> {
         seeds = [b"vault_authority"],
         bump = vault_authority.bump,
         constraint = vault_authority.admin != Pubkey::default() @ ErrorCode::VaultAuthorityNotInitialized,
-        constraint = vault_authority.admin == current_admin.key() @ ErrorCode::UnauthorizedAdmin
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
 
-    pub current_admin: Signer<'info>,
+    #[account(
+        seeds = [b"global_manager"],
+        bump = global_manager.bump,
+        constraint = global_manager.manager != Pubkey::default() @ ErrorCode::GlobalManagerNotInitialized,
+        constraint = global_manager.manager == manager.key() @ ErrorCode::UnauthorizedGlobalManager
+    )]
+    pub global_manager: Account<'info, GlobalManager>,
+
+    pub manager: Signer<'info>,
 
     ///CHECK: will be trusted
     pub new_admin: AccountInfo<'info>,
@@ -198,9 +289,19 @@ pub struct ChangeVaultAuthorityAdmin<'info> {
 
 pub fn change_vault_authority_admin(ctx: Context<ChangeVaultAuthorityAdmin>) -> Result<()> {
     let vault_authority = &mut ctx.accounts.vault_authority;
+    let old_admin = vault_authority.admin;
     vault_authority.admin = ctx.accounts.new_admin.key();
 
-    msg!("Changed vault authority admin to: {}", vault_authority.admin);
+    emit!(crate::state::VaultAuthorityAdminChanged {
+        old_admin,
+        new_admin: ctx.accounts.new_admin.key(),
+        changed_by: ctx.accounts.manager.key(),
+    });
+
+    msg!("Changed vault authority admin from {} to {} by global manager {}", 
+         old_admin, 
+         vault_authority.admin,
+         ctx.accounts.manager.key());
     Ok(())
 }
 
@@ -216,6 +317,46 @@ pub fn get_vault_authority_address(program_id: &Pubkey) -> (Pubkey, u8) {
         &[b"vault_authority"],
         program_id,
     )
+}
+
+pub fn get_global_manager_address(program_id: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[b"global_manager"],
+        program_id,
+    )
+}
+
+#[derive(Accounts)]
+pub struct ChangeGlobalManager<'info> {
+    #[account(
+        mut,
+        seeds = [b"global_manager"],
+        bump = global_manager.bump,
+        constraint = global_manager.manager != Pubkey::default() @ ErrorCode::GlobalManagerNotInitialized,
+        constraint = global_manager.manager == current_manager.key() @ ErrorCode::UnauthorizedGlobalManager
+    )]
+    pub global_manager: Account<'info, GlobalManager>,
+
+    pub current_manager: Signer<'info>,
+
+    ///CHECK: will be trusted
+    pub new_manager: AccountInfo<'info>,
+}
+
+pub fn change_global_manager(ctx: Context<ChangeGlobalManager>) -> Result<()> {
+    let global_manager = &mut ctx.accounts.global_manager;
+    let old_manager = global_manager.manager;
+    global_manager.manager = ctx.accounts.new_manager.key();
+
+    emit!(crate::state::GlobalManagerChanged {
+        old_manager,
+        new_manager: ctx.accounts.new_manager.key(),
+    });
+
+    msg!("Changed global manager from {} to {}", 
+         old_manager, 
+         global_manager.manager);
+    Ok(())
 }
 
 pub fn vault_exists(
@@ -235,9 +376,16 @@ pub struct WithdrawPlatformFees<'info> {
         seeds = [b"vault_authority"],
         bump = vault_authority.bump,
         constraint = vault_authority.admin != Pubkey::default() @ ErrorCode::VaultAuthorityNotInitialized,
-        constraint = vault_authority.admin == admin.key() @ ErrorCode::UnauthorizedAdmin
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
+
+    #[account(
+        seeds = [b"global_manager"],
+        bump = global_manager.bump,
+        constraint = global_manager.manager != Pubkey::default() @ ErrorCode::GlobalManagerNotInitialized,
+        constraint = global_manager.manager == manager.key() @ ErrorCode::UnauthorizedGlobalManager
+    )]
+    pub global_manager: Account<'info, GlobalManager>,
 
     #[account(
         mut,
@@ -253,7 +401,7 @@ pub struct WithdrawPlatformFees<'info> {
     pub destination: InterfaceAccount<'info, TokenAccount>,
 
     pub mint: InterfaceAccount<'info, Mint>,
-    pub admin: Signer<'info>,
+    pub manager: Signer<'info>,
     pub token_program: Interface<'info, TokenInterface>,
 }
 
@@ -281,10 +429,13 @@ pub fn withdraw_platform_fees(ctx: Context<WithdrawPlatformFees>, amount: u64) -
             signer_seeds,
         ),
         amount,
-        ctx.accounts.mint.decimals, // Теперь используем decimals из mint аккаунта
+        ctx.accounts.mint.decimals,
     )?;
 
-    msg!("Withdrew {} tokens from platform fee account to {}", amount, ctx.accounts.destination.key());
+    msg!("Global manager {} withdrew {} tokens from platform fee account to {}", 
+         ctx.accounts.manager.key(),
+         amount, 
+         ctx.accounts.destination.key());
     Ok(())
 }
 
@@ -308,14 +459,19 @@ pub struct CreateVaultWithExtensions<'info> {
         seeds = [b"vault_authority"],
         bump = vault_authority.bump,
         constraint = vault_authority.admin != Pubkey::default() @ ErrorCode::VaultAuthorityNotInitialized,
-        constraint = vault_authority.admin == admin.key() @ ErrorCode::UnauthorizedAdmin
     )]
     pub vault_authority: Account<'info, VaultAuthority>,
+
+    #[account(
+        seeds = [b"adapter_registry"],
+        bump = adapter_registry.bump,
+    )]
+    pub adapter_registry: Account<'info, crate::state::AdapterRegistry>,
 
     #[account(mut)]
     pub payer: Signer<'info>,
 
-    pub admin: Signer<'info>,
+    pub creator: Signer<'info>,
 
     /// CHECK: The vault account will be initialized by this instruction
     #[account(mut)]
@@ -331,6 +487,16 @@ pub struct CreateVaultWithExtensions<'info> {
 }
 
 pub fn create_vault_with_extensions(ctx: Context<CreateVaultWithExtensions>, account_space: u16) -> Result<()> {
+    let adapter_registry = &ctx.accounts.adapter_registry;
+    let creator = ctx.accounts.creator.key();
+    let vault_authority_admin = ctx.accounts.vault_authority.admin;
+
+    // Check if creator is vault authority admin or an operator
+    let is_authorized = creator == vault_authority_admin 
+        || adapter_registry.is_authorized_operator(&creator);
+
+    require!(is_authorized, ErrorCode::UnauthorizedVaultCreator);
+
     // Verify that we're using Token 2022 program
     require!(
         ctx.accounts.vault_token_program.key() == TOKEN_2022_PROGRAM_ID,
@@ -382,8 +548,6 @@ pub fn create_vault_with_extensions(ctx: Context<CreateVaultWithExtensions>, acc
     )?;
 
     // Initialize the token account with extensions
-    // For Token 2022, extensions are automatically handled based on the mint's configuration
-    // If the mint has confidential transfer extension, the account will be initialized with it
     let authority_seeds = [
         b"vault_authority".as_ref(),
         &[vault_authority_bump],
@@ -400,23 +564,14 @@ pub fn create_vault_with_extensions(ctx: Context<CreateVaultWithExtensions>, acc
         signer_seeds,
     );
 
-    // Initialize account with extensions
-    // The token program will automatically handle extensions based on mint configuration
-    // For confidential transfer extension, the account must have the correct size (179 bytes = 165 + 14)
-    // and the mint must have confidential transfer extension enabled
     initialize_account3(initialize_ctx)?;
 
-    // Note: initialize_account3 automatically initializes extensions based on mint configuration.
-    // If the mint has confidential transfer extension, the account extension will be initialized.
-    // This is sufficient for standard token transfers (transfer_checked) used in swap operations.
-    // InitializeConfidentialTransferAccount is only needed if you want to use confidential transfer
-    // functionality (encrypted amounts), but it's NOT required for regular swaps to work.
-
     msg!(
-        "Successfully created vault with extensions: {} for mint: {} (space: {} bytes)",
+        "Successfully created vault with extensions: {} for mint: {} (space: {} bytes) by {}",
         ctx.accounts.vault.key(),
         ctx.accounts.vault_mint.key(),
-        total_size
+        total_size,
+        creator
     );
     Ok(())
 }

@@ -13,6 +13,10 @@ use crate::instructions::route_validator_module;
 use crate::instructions::route_executor_module;
 use crate::instructions::vault_manager_module::{VaultAuthority, get_vault_authority_address};
 
+// Test modules
+#[cfg(test)]
+mod limit_orders_test;
+
 /// Trigger type for limit order execution
 #[repr(u8)]
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1045,12 +1049,7 @@ pub struct CloseLimitOrderByOperator<'info> {
     /// Operator cannot close Open orders - only creator can cancel them
     #[account(
         mut,
-        close = operator,
-        constraint = (
-            limit_order.status == OrderStatus::Init ||
-            limit_order.status == OrderStatus::Filled ||
-            limit_order.status == OrderStatus::Cancelled
-        ) @ ErrorCode::InvalidOrderStatus
+        close = operator
     )]
     pub limit_order: Account<'info, LimitOrder>,
 
@@ -1084,9 +1083,16 @@ pub struct CloseLimitOrderByOperator<'info> {
 pub fn close_limit_order_by_operator(ctx: Context<CloseLimitOrderByOperator>) -> Result<()> {
     let order_key = ctx.accounts.limit_order.key();
     let operator_key = ctx.accounts.operator.key();
-    let status = ctx.accounts.limit_order.status as u8;
+    let status = ctx.accounts.limit_order.status;
 
-    msg!("Closing limit order {} by operator {}, status: {}", order_key, operator_key, status);
+    // Only Init, Filled, or Cancelled orders can be closed by operator
+    // Open orders must be cancelled first (by creator or expired by operator)
+    require!(
+        status == OrderStatus::Init || status == OrderStatus::Filled || status == OrderStatus::Cancelled,
+        ErrorCode::InvalidOrderStatus
+    );
+
+    msg!("Closing limit order {} by operator {}, status: {}", order_key, operator_key, status as u8);
 
     // Prepare PDA signer seeds
     let vault_authority_bump = ctx.bumps.vault_authority;
@@ -1117,7 +1123,7 @@ pub fn close_limit_order_by_operator(ctx: Context<CloseLimitOrderByOperator>) ->
     emit_cpi!(LimitOrderClosed {
         order: order_key,
         closer: operator_key,
-        status,
+        status: status as u8,
     });
     Ok(())
 }

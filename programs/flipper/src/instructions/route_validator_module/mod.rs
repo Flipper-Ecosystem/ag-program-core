@@ -4,6 +4,10 @@ use crate::adapters::adapter_connector_module::{AdapterContext, get_adapter};
 use crate::errors::ErrorCode;
 use crate::state::*;
 
+// Test modules
+#[cfg(test)]
+mod route_validator_test;
+
 // Program IDs for validation
 pub const TOKEN_PROGRAM_ID: Pubkey = anchor_spl::token::ID;
 pub const TOKEN_2022_PROGRAM_ID: Pubkey = anchor_spl::token_2022::ID;

@@ -3,12 +3,17 @@ use crate::adapters::adapter_connector_module::{AdapterContext, get_adapter};
 use crate::errors::ErrorCode;
 use crate::state::*;
 
+// Test modules
+#[cfg(test)]
+mod adapter_registry_test;
+
 /// Initializes the adapter registry with a list of supported adapters and operators.
 pub fn initialize_adapter_registry(ctx: Context<InitializeAdapterRegistry>, adapters: Vec<AdapterInfo>, operators: Vec<Pubkey>) -> Result<()> {
     let registry = &mut ctx.accounts.adapter_registry;
     registry.supported_adapters = adapters;
     registry.authority = ctx.accounts.authority.key();
     registry.operators = operators;
+    registry.bump = ctx.bumps.adapter_registry;
     Ok(())
 }
 
@@ -139,13 +144,22 @@ pub fn reset_adapter_registry(ctx: Context<ResetAdapterRegistry>, adapters: Vec<
     Ok(())
 }
 
+/// Migrates the adapter registry to write the PDA bump seed into the account data.
+/// This is needed because the bump field was added after the account was originally created on-chain.
+/// The account is reallocated to accommodate the extra byte if necessary.
+pub fn migrate_adapter_registry(ctx: Context<MigrateAdapterRegistry>) -> Result<()> {
+    let registry = &mut ctx.accounts.adapter_registry;
+    registry.bump = ctx.bumps.adapter_registry;
+    Ok(())
+}
+
 /// Accounts for initializing the adapter registry.
 #[derive(Accounts)]
 pub struct InitializeAdapterRegistry<'info> {
     #[account(
         init,
         payer = payer,
-        space = 8 + 32 + 4 + 10 * (4 + 32 + 32) + 4 + 10 * 32,
+        space = 8 + 32 + 4 + 10 * (4 + 32 + 32) + 4 + 10 * 32 + 1,
         seeds = [b"adapter_registry"],
         bump
     )]
@@ -293,4 +307,24 @@ pub struct ResetAdapterRegistry<'info> {
     pub adapter_registry: Account<'info, AdapterRegistry>,
     #[account(signer)]
     pub authority: Signer<'info>,
+}
+
+/// Accounts for migrating the adapter registry (writing bump to existing account).
+/// Uses realloc to expand the account by 1 byte and re-derives the bump from seeds.
+#[derive(Accounts)]
+pub struct MigrateAdapterRegistry<'info> {
+    #[account(
+        mut,
+        realloc = 8 + 32 + 4 + 10 * (4 + 32 + 32) + 4 + 10 * 32 + 1,
+        realloc::payer = payer,
+        realloc::zero = false,
+        seeds = [b"adapter_registry"],
+        bump,
+        has_one = authority @ ErrorCode::InvalidAuthority
+    )]
+    pub adapter_registry: Account<'info, AdapterRegistry>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }

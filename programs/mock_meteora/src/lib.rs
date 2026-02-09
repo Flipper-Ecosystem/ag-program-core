@@ -4,7 +4,7 @@ use anchor_spl::{
     token_interface::{Mint, TokenAccount, TokenInterface, transfer_checked, TransferChecked},
 };
 
-declare_id!("Ch3ntiZFPQYozofrWrjkUcKiyVrmmE5i1YodBDd7a5ax");
+declare_id!("3gD2eXxYMEqYsamgosxKb7MdVqgeVYDuSDKdnT9jDTr1");
 
 #[program]
 pub mod mock_meteora_swap {

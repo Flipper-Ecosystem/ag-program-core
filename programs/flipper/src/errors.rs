@@ -115,5 +115,29 @@ pub enum ErrorCode {
     InsufficientOutputAmount,
 
     #[msg("Stop loss price not reached")]
-    StopLossPriceNotReached
+    StopLossPriceNotReached,
+
+    #[msg("Insufficient funds in vault")]
+    InsufficientFunds,
+
+    #[msg("Global manager not initialized")]
+    GlobalManagerNotInitialized,
+
+    #[msg("Unauthorized global manager")]
+    UnauthorizedGlobalManager,
+
+    #[msg("Unauthorized: only admin or operator can create vaults")]
+    UnauthorizedVaultCreator,
+
+    #[msg("Jupiter remaining accounts: program_authority must match vault_authority")]
+    JupiterProgramAuthorityMismatch,
+
+    #[msg("Jupiter remaining accounts: program_source must match vault_source")]
+    JupiterProgramSourceMismatch,
+
+    #[msg("Jupiter remaining accounts: program_destination must match vault_destination")]
+    JupiterProgramDestinationMismatch,
+
+    #[msg("Not enough Jupiter accounts in remaining_accounts")]
+    NotEnoughJupiterAccounts,
 }

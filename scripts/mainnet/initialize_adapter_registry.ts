@@ -6,23 +6,25 @@ import fs from "fs";
 
 // Function to load keypair for mainnet wallet
 const loadKeypair = (): Keypair => {
-    const keypairPath = process.env.HOME + "/.config/solana/fpp-staging.json";
-    if (fs.existsSync(keypairPath)) {
-        const secretKey = JSON.parse(fs.readFileSync(keypairPath, "utf8"));
-        return Keypair.fromSecretKey(Uint8Array.from(secretKey));
-    }
-    console.warn("Keypair file not found, generating a new one for localnet.");
-    return Keypair.generate();
+  const keypairPath = process.env.HOME + "/.config/solana/fpp-staging.json";
+  if (fs.existsSync(keypairPath)) {
+    const secretKey = JSON.parse(fs.readFileSync(keypairPath, "utf8"));
+    return Keypair.fromSecretKey(Uint8Array.from(secretKey));
+  }
+  console.warn("Keypair file not found, generating a new one for localnet.");
+  return Keypair.generate();
 };
 
-
 // Configure connection to Solana Mainnet
-const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
+const connection = new Connection(
+  "https://api.mainnet-beta.solana.com",
+  "confirmed"
+);
 
 // Create wallet and provider for Anchor
 const wallet = new anchor.Wallet(loadKeypair());
 const provider = new AnchorProvider(connection, wallet, {
-    commitment: "confirmed",
+  commitment: "confirmed",
 });
 anchor.setProvider(provider);
 
@@ -33,87 +35,104 @@ let adapterRegistry: PublicKey;
 let adapterRegistryBump: number;
 
 async function initializeAdapterRegistry() {
-    console.log("🚀 Initializing adapter registry on mainnet...\n");
+  console.log("🚀 Initializing adapter registry on mainnet...\n");
 
-    // Get operator from environment variable or use wallet as default
-    const operatorPubkey = process.env.OPERATOR_PUBKEY;
-    if (!operatorPubkey) {
-        throw new Error("OPERATOR_PUBKEY environment variable is required. Set it to the operator's public key.");
+  // Get operator from environment variable or use wallet as default
+  const operatorPubkey = process.env.OPERATOR_PUBKEY;
+  if (!operatorPubkey) {
+    throw new Error(
+      "OPERATOR_PUBKEY environment variable is required. Set it to the operator's public key."
+    );
+  }
+  const operator = new PublicKey(operatorPubkey);
+
+  console.log("📍 Configuration:");
+  console.log("   Authority:", wallet.publicKey.toBase58());
+  console.log("   Operator:", operator.toBase58(), "\n");
+
+  // Derive adapter registry PDA
+  [adapterRegistry, adapterRegistryBump] = PublicKey.findProgramAddressSync(
+    [Buffer.from("adapter_registry")],
+    flipperProgram.programId
+  );
+
+  console.log("📍 Adapter Registry PDA:", adapterRegistry.toBase58(), "\n");
+
+  // Check if adapter registry already exists
+  try {
+    const registryAccount = await (
+      flipperProgram.account as any
+    ).adapterRegistry.fetch(adapterRegistry);
+    console.log("⚠️  Adapter registry already exists!");
+    console.log("   Current authority:", registryAccount.authority.toBase58());
+    console.log(
+      "   Current operators:",
+      registryAccount.operators.map((op: PublicKey) => op.toBase58())
+    );
+    console.log(
+      "\n   Use manage_operator.ts to add/remove operators instead.\n"
+    );
+    return;
+  } catch (error: any) {
+    if (!error.message.includes("Account does not exist")) {
+      throw error;
     }
-    const operator = new PublicKey(operatorPubkey);
+    // Account doesn't exist, proceed with initialization
+  }
 
-    console.log("📍 Configuration:");
+  // Initialize adapter registry with empty adapters and operator
+  console.log("⚙️  Initializing adapter registry...");
+  try {
+    const txSignature = await flipperProgram.methods
+      .initializeAdapterRegistry([], [operator])
+      .accounts({
+        adapterRegistry,
+        payer: wallet.publicKey,
+        authority: wallet.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([wallet.payer])
+      .rpc();
+
+    console.log("✅ Adapter registry initialized successfully!");
+    console.log("   Transaction signature:", txSignature);
     console.log("   Authority:", wallet.publicKey.toBase58());
     console.log("   Operator:", operator.toBase58(), "\n");
+  } catch (error) {
+    console.error("❌ Failed to initialize adapter registry:", error);
+    throw error;
+  }
 
-    // Derive adapter registry PDA
-    [adapterRegistry, adapterRegistryBump] = PublicKey.findProgramAddressSync(
-        [Buffer.from("adapter_registry")],
-        flipperProgram.programId
+  // Verify initialization
+  try {
+    const registryAccount = await (
+      flipperProgram.account as any
+    ).adapterRegistry.fetch(adapterRegistry);
+    console.log("✅ Verification:");
+    console.log("   Authority:", registryAccount.authority.toBase58());
+    console.log(
+      "   Operators:",
+      registryAccount.operators.map((op: PublicKey) => op.toBase58())
     );
+    console.log(
+      "   Supported adapters:",
+      registryAccount.supportedAdapters.length,
+      "\n"
+    );
+  } catch (error) {
+    console.error("❌ Failed to verify adapter registry:", error);
+    throw error;
+  }
 
-    console.log("📍 Adapter Registry PDA:", adapterRegistry.toBase58(), "\n");
-
-    // Check if adapter registry already exists
-    try {
-        const registryAccount = await (flipperProgram.account as any).adapterRegistry.fetch(adapterRegistry);
-        console.log("⚠️  Adapter registry already exists!");
-        console.log("   Current authority:", registryAccount.authority.toBase58());
-        console.log("   Current operators:", registryAccount.operators.map((op: PublicKey) => op.toBase58()));
-        console.log("\n   Use manage_operator.ts to add/remove operators instead.\n");
-        return;
-    } catch (error: any) {
-        if (!error.message.includes("Account does not exist")) {
-            throw error;
-        }
-        // Account doesn't exist, proceed with initialization
-    }
-
-    // Initialize adapter registry with empty adapters and operator
-    console.log("⚙️  Initializing adapter registry...");
-    try {
-        const txSignature = await flipperProgram.methods
-            .initializeAdapterRegistry([], [operator])
-            .accounts({
-                adapterRegistry,
-                payer: wallet.publicKey,
-                authority: wallet.publicKey,
-                systemProgram: SystemProgram.programId,
-            })
-            .signers([wallet.payer])
-            .rpc();
-
-        console.log("✅ Adapter registry initialized successfully!");
-        console.log("   Transaction signature:", txSignature);
-        console.log("   Authority:", wallet.publicKey.toBase58());
-        console.log("   Operator:", operator.toBase58(), "\n");
-    } catch (error) {
-        console.error("❌ Failed to initialize adapter registry:", error);
-        throw error;
-    }
-
-    // Verify initialization
-    try {
-        const registryAccount = await (flipperProgram.account as any).adapterRegistry.fetch(adapterRegistry);
-        console.log("✅ Verification:");
-        console.log("   Authority:", registryAccount.authority.toBase58());
-        console.log("   Operators:", registryAccount.operators.map((op: PublicKey) => op.toBase58()));
-        console.log("   Supported adapters:", registryAccount.supportedAdapters.length, "\n");
-    } catch (error) {
-        console.error("❌ Failed to verify adapter registry:", error);
-        throw error;
-    }
-
-    console.log("🎉 Adapter registry initialization completed!\n");
+  console.log("🎉 Adapter registry initialization completed!\n");
 }
 
 // Main execution
 (async () => {
-    try {
-        await initializeAdapterRegistry();
-    } catch (error) {
-        console.error("Fatal error:", error);
-        process.exit(1);
-    }
+  try {
+    await initializeAdapterRegistry();
+  } catch (error) {
+    console.error("Fatal error:", error);
+    process.exit(1);
+  }
 })();
-

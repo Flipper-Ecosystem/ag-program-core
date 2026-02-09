@@ -2,12 +2,30 @@
   "license": "ISC",
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
-    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
+    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
+    "devnet:setup-jupiter": "ts-node scripts/devnet/4.setup_shared_jupiter_environment.ts",
+    "devnet:create-vaults": "ts-node scripts/devnet/test_create_vaults_with_id.ts",
+    "devnet:test-route": "ts-node scripts/devnet/5.test_shared_route_jupiter.ts",
+    "devnet:test-limit-orders": "ts-node scripts/devnet/6.test_shared_limit_orders_jupiter.ts",
+    "devnet:verify": "ts-node scripts/devnet/7.verify_jupiter_mock_config.ts",
+    "devnet:check-status": "ts-node scripts/devnet/8.check_account_status.ts",
+    "devnet:change-authority": "ts-node scripts/devnet/change_vault_authority_and_add_operator.ts",
+    "devnet:test-all": "npm run devnet:setup-jupiter && npm run devnet:create-vaults && npm run devnet:verify && npm run devnet:test-route && npm run devnet:test-limit-orders",
+    "mainnet:test-shared-route": "ts-node scripts/mainnet/test_shared_route_jupiter.ts",
+    "mainnet:check-shared-route": "ts-node scripts/mainnet/check_shared_route_setup.ts",
+    "mainnet:buy-near": "ts-node scripts/mainnet/test_swap_near.ts",
+    "mainnet:create-vault": "ts-node scripts/mainnet/create_vault_for_mint.ts",
+    "mainnet:check-manager": "ts-node scripts/mainnet/check_global_manager.ts",
+    "mainnet:create-manager": "ts-node scripts/mainnet/create_global_manager.ts",
+    "mainnet:change-manager": "ts-node scripts/mainnet/change_global_manager.ts",
+    "mainnet:migrate-registry": "ts-node scripts/mainnet/migrate_adapter_registry.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",
+    "@jup-ag/api": "^6.0.48",
     "@solana/spl-token": "^0.4.13",
-    "@solana/web3.js": "^1.95.3"
+    "@solana/web3.js": "^1.98.4",
+    "dotenv": "^17.2.3"
   },
   "devDependencies": {
     "@types/bn.js": "^5.1.0",
