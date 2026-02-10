@@ -309,16 +309,15 @@ pub fn change_vault_authority_admin(ctx: Context<ChangeVaultAuthorityAdmin>) -> 
 
 #[derive(Accounts)]
 pub struct MigrateVaultAuthority<'info> {
+    /// CHECK: Manually validated in handler. Cannot use Account<VaultAuthority> because
+    /// the on-chain account uses the old layout (41 bytes, without jupiter_program_id)
+    /// and Anchor cannot deserialize it into the new 73-byte VaultAuthority struct.
     #[account(
         mut,
-        realloc = 8 + 32 + 1 + 32,
-        realloc::payer = payer,
-        realloc::zero = false,
         seeds = [b"vault_authority"],
         bump,
-        constraint = vault_authority.admin == admin.key() @ ErrorCode::UnauthorizedAdmin
     )]
-    pub vault_authority: Account<'info, VaultAuthority>,
+    pub vault_authority: AccountInfo<'info>,
 
     pub admin: Signer<'info>,
 
@@ -329,9 +328,57 @@ pub struct MigrateVaultAuthority<'info> {
 }
 
 pub fn migrate_vault_authority(ctx: Context<MigrateVaultAuthority>, jupiter_program_id: Pubkey) -> Result<()> {
-    let vault_authority = &mut ctx.accounts.vault_authority;
-    vault_authority.bump = ctx.bumps.vault_authority;
-    vault_authority.jupiter_program_id = jupiter_program_id;
+    let vault_authority = &ctx.accounts.vault_authority;
+
+    // Verify the account is owned by this program
+    require!(
+        vault_authority.owner == ctx.program_id,
+        ErrorCode::InvalidAuthority
+    );
+
+    // Verify discriminator and read admin from old layout
+    let data = vault_authority.try_borrow_data()?;
+    require!(data.len() >= 41, ErrorCode::InvalidAccount);
+
+    let expected_disc = <VaultAuthority as anchor_lang::Discriminator>::DISCRIMINATOR;
+    require!(&data[..8] == expected_disc, ErrorCode::InvalidAccount);
+
+    // Read admin from old layout: discriminator (8) + admin (32) + bump (1)
+    let admin_bytes: [u8; 32] = data[8..40].try_into().unwrap();
+    let stored_admin = Pubkey::from(admin_bytes);
+    require!(stored_admin == ctx.accounts.admin.key(), ErrorCode::UnauthorizedAdmin);
+
+    drop(data); // Release borrow before realloc
+
+    // Realloc: 8 (discriminator) + 32 (admin) + 1 (bump) + 32 (jupiter_program_id) = 73
+    let new_size: usize = 8 + 32 + 1 + 32;
+    let rent = Rent::get()?;
+    let new_minimum_balance = rent.minimum_balance(new_size);
+    let lamports_diff = new_minimum_balance.saturating_sub(vault_authority.lamports());
+
+    if lamports_diff > 0 {
+        anchor_lang::solana_program::program::invoke(
+            &anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.payer.key(),
+                &vault_authority.key(),
+                lamports_diff,
+            ),
+            &[
+                ctx.accounts.payer.to_account_info(),
+                vault_authority.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+        )?;
+    }
+
+    vault_authority.realloc(new_size, false)?;
+
+    // Write new fields into the reallocated account
+    let mut data = vault_authority.try_borrow_mut_data()?;
+    let bump = ctx.bumps.vault_authority;
+    data[40] = bump;
+    data[41..73].copy_from_slice(jupiter_program_id.as_ref());
+
     msg!("Migrated vault authority. Jupiter program: {}", jupiter_program_id);
     Ok(())
 }
